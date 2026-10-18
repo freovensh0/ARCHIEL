@@ -626,6 +626,35 @@ private fun AssistantTurn(text: String, streaming: Boolean = false) {
         blocks.forEachIndexed { index, block ->
             when (block) {
                 is Block.Code -> CodeBlock(block)
+                is Block.Heading -> Text(
+                    inline(
+                        block.text,
+                        streaming && index == blocks.lastIndex,
+                    ),
+                    style = when (block.level) {
+                        1 -> MaterialTheme.typography.titleMedium
+                        2 -> MaterialTheme.typography.titleSmall
+                        else -> MaterialTheme.typography.labelLarge
+                    },
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                is Block.Bullet -> Row(Modifier.padding(start = Space.s)) {
+                    Text(
+                        block.marker,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    SelectionContainer {
+                        Text(
+                            inline(
+                                block.text,
+                                streaming && index == blocks.lastIndex,
+                            ),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
                 is Block.Paragraph -> {
                     val caret = streaming && index == blocks.lastIndex
                     SelectionContainer {
@@ -718,21 +747,26 @@ private fun ReasoningBlock(part: Part) {
 internal sealed interface Block {
     data class Paragraph(val text: String) : Block
     data class Code(val lines: List<String>, val language: String?) : Block
+    data class Heading(val level: Int, val text: String) : Block
+    data class Bullet(val text: String, val marker: String) : Block
 }
 
-/** Fenced code blocks and blank line paragraphs; everything else stays in one paragraph. */
+/** Fenced code, headings, list items and blank-line paragraphs. */
 internal fun parseBlocks(source: String): List<Block> {
     val lines = source.lines()
     val blocks = mutableListOf<Block>()
     val buffer = mutableListOf<String>()
+    fun flush() {
+        if (buffer.isNotEmpty()) {
+            blocks += Block.Paragraph(buffer.joinToString("\n").trimEnd())
+            buffer.clear()
+        }
+    }
     var i = 0
     while (i < lines.size) {
         val line = lines[i]
         if (line.trimStart().startsWith("```")) {
-            if (buffer.isNotEmpty()) {
-                blocks += Block.Paragraph(buffer.joinToString("\n").trimEnd())
-                buffer.clear()
-            }
+            flush()
             val language = line.trimStart().removePrefix("```").trim().ifBlank { null }
             val code = mutableListOf<String>()
             i++
@@ -742,6 +776,20 @@ internal fun parseBlocks(source: String): List<Block> {
             }
             i++
             blocks += Block.Code(code, language)
+            continue
+        }
+        val plain = line.trimStart()
+        val heading = Regex("^(#{1,6})\\s+(.+)$").matchEntire(plain)
+        val bullet = Regex("^[-*]\\s+(.+)$").matchEntire(plain)
+        val ordered = Regex("^(\\d{1,3})[.)]\\s+(.+)$").matchEntire(plain)
+        if (heading != null || bullet != null || ordered != null) {
+            flush()
+            when {
+                heading != null -> blocks += Block.Heading(heading.groupValues[1].length, heading.groupValues[2])
+                bullet != null -> blocks += Block.Bullet(bullet.groupValues[1], "• ")
+                else -> blocks += Block.Bullet(ordered.groupValues[2], ordered.groupValues[1] + ". ")
+            }
+            i++
             continue
         }
         if (line.isBlank() && buffer.isNotEmpty()) {

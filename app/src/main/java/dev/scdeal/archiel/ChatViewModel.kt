@@ -14,10 +14,10 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import java.io.IOException
 import kotlin.math.min
 
-data class ChatState(
-    val sessions: List<Session> = emptyList(),
+data class ChatState(    val sessions: List<Session> = emptyList(),
     val commands: List<CommandInfo> = emptyList(),
     val agents: List<AgentInfo> = emptyList(),
     val models: List<ModelInfo> = emptyList(),
@@ -39,6 +39,16 @@ data class ChatState(
     val latencyMs: Long? = null,
     val serverVersion: String? = null,
     val error: String? = null,
+)
+
+/** The session commands the TUI keeps out of /api/command and runs itself; we do the same here. */
+val builtins = listOf(
+    CommandInfo("compact", "Compress the transcript into a summary"),
+    CommandInfo("fork", "Fork this session into a new one"),
+    CommandInfo("undo", "Rewind to before the last prompt you sent"),
+    CommandInfo("redo", "Walk the undo back forward"),
+    CommandInfo("rename", "Retitle this session; anything after /rename is the title"),
+    CommandInfo("reload", "Reload the server configuration after you edit it"),
 )
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
@@ -72,7 +82,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** The server registers plugins after it starts, so the dock refetches commands instead of caching them. */
     fun loadCommands() = viewModelScope.launch {
         runCatching { client.commands(_state.value.location) }
-            .onSuccess { list -> _state.update { it.copy(commands = list) } }
+            .onSuccess { list ->
+                _state.update { st ->
+                    st.copy(commands = builtins + list.filterNot { s -> builtins.any { it.name == s.name } })
+                }
+            }
     }
 
     /** Both pickers are fetched the first time they are opened, not on every start. */
@@ -181,11 +195,47 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun runCommand(name: String, arguments: String) {
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
+            if (name in builtins.map { it.name }) {
+                builtin(id, name, arguments)
+                return@launch
+            }
             _state.update { it.copy(busy = true, cutShort = false, thinking = "", tools = emptyList(), error = null) }
             runCatching { client.runCommand(id, name, arguments) }
                 .onSuccess { pollPermissions() }
                 .onFailure { e -> _state.update { it.copy(busy = false, error = "Could not run /$name: ${e.message}") } }
         }
+    }
+
+    /** The app-level slash set: the same calls the official TUI makes when you run these. */
+    private suspend fun builtin(id: String, name: String, arguments: String) {
+        runCatching {
+            when (name) {
+                "compact" -> client.compact(id)
+                "undo" -> {
+                    client.interrupt(id)
+                    val last = _state.value.messages.lastOrNull { it.type == "user" && !it.id.startsWith("local-") }
+                    client.revertStage(id, last?.id ?: throw IOException("Nothing to undo"))
+                }
+                "redo" -> client.revertClear(id)
+                "reload" -> client.reloadConfig()
+                "rename" -> {
+                    val title = arguments.trim()
+                    if (title.isEmpty()) throw IOException("Type the title after /rename")
+                    client.retitle(id, title)
+                    _state.update { st ->
+                        st.copy(title = title, sessions = st.sessions.map { if (it.id == id) it.copy(title = title) else it })
+                    }
+                }
+                "fork" -> {
+                    val forked = client.fork(id)
+                    _state.update { it.copy(sessions = listOf(forked) + it.sessions.filterNot { x -> x.id == forked.id }) }
+                    open(forked.id)
+                    return
+                }
+            }
+        }
+            .onFailure { e -> _state.update { it.copy(error = "Could not run /$name: ${e.message}") } }
+        loadMessages()
     }
 
     fun refresh() = viewModelScope.launch {

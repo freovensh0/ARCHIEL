@@ -241,6 +241,34 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
         call("POST", "/api/session/$sessionID/interrupt", "{}")
     }
 
+    /** Turn the transcript into a summary; the server summarises it in the background. */
+    suspend fun compact(sessionID: String) {
+        call("POST", "/api/session/$sessionID/compact", "{}")
+    }
+
+    /** A fork keeps the transcript and returns the fresh session it was copied into. */
+    suspend fun fork(sessionID: String): Session =
+        json.decodeFromString(One.serializer(Session.serializer()), call("POST", "/api/session/$sessionID/fork", "{}"))
+            .data
+
+    /** Rewind to just before a message; the clear call walks an undo forward again. */
+    suspend fun revertStage(sessionID: String, messageID: String) {
+        call("POST", "/api/session/$sessionID/revert/stage", buildJsonObject { put("messageID", messageID) }.toString())
+    }
+
+    suspend fun revertClear(sessionID: String) {
+        call("DELETE", "/api/session/$sessionID/revert")
+    }
+
+    suspend fun retitle(sessionID: String, title: String) {
+        call("PATCH", "/api/session/$sessionID", buildJsonObject { put("title", title) }.toString())
+    }
+
+    /** The server re-reads its config; used after the user edits one outside the app. */
+    suspend fun reloadConfig() {
+        call("POST", "/api/location/reload", "{}")
+    }
+
     /** Live events for every session on the server. The caller filters by sessionID. No replay. */
     fun events(): Flow<JsonObject> = callbackFlow {
         val httpCall = http.newCall(request("/api/event").build())

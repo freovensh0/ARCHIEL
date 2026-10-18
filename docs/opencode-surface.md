@@ -87,6 +87,17 @@ run hits `ask`, the client sees a `Permission.Request` (`id`, `action`, `resourc
 
 **This is why the app needs the permission card:** without it a run that hits `ask` waits forever.
 
+## The TUI slash palette is not /api/command
+
+The official TUI keeps a second command set that is never registered on the server: `/pair`
+(pairing dialog for other devices), `/restart` (restarts the local service), `/themes`, `/status`,
+`/debug`, `/clear`, `/update` and friends are TUI-only dialogs, so they never show up in
+`/api/command`. The session-level ones have real HTTP calls and ARCHIEL serves them itself as
+built-in dock commands: `/compact` (POST compact), `/fork` (POST fork, returns the new session),
+`/undo` (interrupt + revert/stage on the last user message), `/redo` (DELETE revert),
+`/rename <title>` (PATCH session), `/reload` (POST location/reload), `/new` (POST session) —
+the `/pair`, `/restart`, `/themes`, `/status` ones stay TUI-only on purpose.
+
 ## What ARCHIEL does not use yet
 
 PTY terminals, voice sessions, worktrees, VCS actions, plugin RPC, credentials and integrations,
