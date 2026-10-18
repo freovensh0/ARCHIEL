@@ -18,7 +18,8 @@ class SseBufferTest {
 
     @Test
     fun `cok satirli veri birlestirilir`() {
-        val out = frames("data: {\"type\":", "\"x\"}", "")
+        // SSE kurali: cok satirli alanin her satiri "data:" onekiyle gelir.
+        val out = frames("data: {\"type\":", "data: \"x\"}", "")
         assertNull(out[1])
         assertEquals("{\"type\":" + "\"x\"}", out[2])
     }
