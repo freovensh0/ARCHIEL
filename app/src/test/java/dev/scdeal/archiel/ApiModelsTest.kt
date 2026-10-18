@@ -43,6 +43,6 @@ class ApiModelsTest {
         val part = json.decodeFromString(Part.serializer(), row)
         assertEquals("reasoning", part.type)
         assertEquals(true, part.text?.startsWith("**Inspecting"))
-        assertEquals(43000, part.time?.completed)
+        assertEquals(43000L, part.time?.completed)
     }
 }
