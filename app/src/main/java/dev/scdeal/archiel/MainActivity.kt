@@ -757,7 +757,7 @@ internal fun parseBlocks(source: String): List<Block> {
     val blocks = mutableListOf<Block>()
     val buffer = mutableListOf<String>()
     fun flush() {
-        if (buffer.isNotEmpty()) {
+        if (buffer.any { it.isNotBlank() }) {
             blocks += Block.Paragraph(buffer.joinToString("\n").trimEnd())
             buffer.clear()
         }
