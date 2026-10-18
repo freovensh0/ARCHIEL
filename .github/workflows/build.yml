@@ -19,8 +19,8 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - uses: android-actions/setup-android@v3
-
+      # setup-android@v3 kırık (içeriden kaldırılmış "sdkmanager tools" paketini çağırıyor).
+      # ubuntu-latest imajında SDK ve lisanslar hazır geliyor.
       - run: yes | sdkmanager --licenses > /dev/null || true
 
       - name: Birim testleri + derle
