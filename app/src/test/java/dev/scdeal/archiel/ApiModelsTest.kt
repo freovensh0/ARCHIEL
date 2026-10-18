@@ -32,4 +32,17 @@ class ApiModelsTest {
         val session = json.decodeFromString(Session.serializer(), row)
         assertEquals("/home/x/project", session.location?.directory)
     }
+
+    @Test
+    fun `a reasoning part keeps its text and the time it took`() {
+        val row = """
+            {"id":"prt_1","type":"reasoning",
+             "text":"**Inspecting the ARK layout**\n\nNeed to surface space for the session list.",
+             "time":{"created":1000,"completed":43000}}
+        """.trimIndent()
+        val part = json.decodeFromString(Part.serializer(), row)
+        assertEquals("reasoning", part.type)
+        assertEquals(true, part.text?.startsWith("**Inspecting"))
+        assertEquals(43000, part.time?.completed)
+    }
 }

@@ -47,8 +47,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
@@ -172,13 +174,15 @@ private fun TopBar(title: String, onBack: (() -> Unit)? = null, status: String? 
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (onBack != null) BarButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", onBack)
+            // Filling the remaining width here is what pushes the actions onto the right edge; a
+            // trailing weighted spacer leaves them short of it by whatever the title doesn't use.
             Text(
                 title,
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false).padding(start = if (onBack == null) Space.xs else Space.xs),
+                modifier = Modifier.weight(1f).padding(start = Space.xs),
             )
             if (status != null) {
                 Spacer(Modifier.width(Space.s))
@@ -186,7 +190,6 @@ private fun TopBar(title: String, onBack: (() -> Unit)? = null, status: String? 
                 Spacer(Modifier.width(Space.xs))
                 Text(status, style = MaterialTheme.typography.labelSmall)
             }
-            Spacer(Modifier.weight(1f))
             actions.forEach { (icon, label, onClick) -> BarButton(icon, label, onClick) }
         }
         Hairline()
@@ -604,7 +607,8 @@ private fun Turn(message: Message) {
             when (part.type) {
                 "text" -> AssistantTurn(part.text.orEmpty())
                 "tool" -> ToolBlock(part)
-                else -> Unit // reasoning stays hidden in v1
+                "reasoning" -> ReasoningBlock(part)
+                else -> Unit
             }
         }
         if (parts.any { it.type == "text" }) {
@@ -658,6 +662,55 @@ private fun LiveTurn(thinking: String, text: String) {
             Spacer(Modifier.height(Space.m))
         }
         if (text.isNotEmpty()) AssistantTurn(text, streaming = true)
+    }
+}
+
+/** Adapted from opencode's TUI ReasoningPart: collapsed by default, tap toggles the muted body. */
+@Composable
+private fun ReasoningBlock(part: Part) {
+    // OpenRouter encrypts some reasoning blocks; drop the frozen placeholder like the TUI does.
+    val text = (part.text ?: "").replace("[REDACTED]", "").trim()
+    if (text.isEmpty()) return
+    var open by remember { mutableStateOf(false) }
+    val ran = (part.time?.completed ?: 0) - (part.time?.created ?: 0)
+    val duration =
+        if (ran > 0) {
+            val total = ran / 1000
+            if (total >= 60) "${total / 60}m ${total % 60}s" else "${total}s"
+        } else {
+            null
+        }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Radius.chip))
+            .clickable { open = !open }
+            .padding(vertical = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
+            contentDescription = if (open) "Hide thinking" else "Show thinking",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(Space.xs))
+        Text(
+            duration?.let { "Thought $it" } ?: "Thought",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    if (open) {
+        Spacer(Modifier.height(Space.xs))
+        SelectionContainer {
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(Space.xs))
     }
 }
 

@@ -66,7 +66,11 @@ data class Part(
     val text: String? = null,
     val name: String? = null,
     val state: PartState? = null,
+    val time: PartTime? = null,
 )
+
+@Serializable
+data class PartTime(val created: Long? = null, val completed: Long? = null)
 
 @Serializable
 data class PartState(
