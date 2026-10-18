@@ -12,20 +12,31 @@ Grounded in the `spec-mockup-design` skill and the `lunanoir21/desktop-widget-co
 (`#11120e` graphite, `#e0a458` amber). The tokens are generated, not hand-picked:
 
 ```sh
-python3 scripts/palette.py --hue 75 --mood crisp --scheme mono --name amber --css design/palette.css
+python3 scripts/palette.py --from-hex "#e0a458" --mood crisp --scheme mono --css design/palette.css
 python3 scripts/scales.py --target mobile --density normal --css design/scales.css
 ```
 
-| | dark | light |
-|---|---|---|
-| ground / surface / line | `#100F0E` `#161513` `#2A2928` | `#F5F3F1` `#FBF9F7` `#D9D7D5` |
-| text / secondary | `#F0EEEC` `#A09E9B` | `#131110` `#6B6866` |
-| accent (the only signal) | `#DB9E3D` | `#7E5403` |
+Dark only for now, and the values are structural rather than picked: a ground, a text colour, one
+accent, and two mixed from them, the way `lunanoir21/tally-omarchy` does it.
+
+| token | value |
+|---|---|
+| ground / surface / hairline | `#0F0F10` `#17171A` `#26262A` |
+| text / secondary / faint | `#ECECEC` `#A8A8AD` `#5D5D63` |
+| accent fill (the only signal) | `#E0A458`, ink `#14110C` on top |
+| danger / ok | `#DC615A` `#74BF85` |
+
+Contrast on the ground: text 16.6:1, secondary 6.8:1, accent 7.8:1, danger 5.4:1.
 
 - Type: **Instrument Sans** (body), **Syne** (titles), **DM Mono** (code and tool output) — the
   reference project's own fonts, OFL licensed (`licenses/`).
 - A 4 px base scale: 4 / 8 / 12 / 16 / 24 / 32. Radii 5 / 10 / 16.
 - Separation is a 1 px hairline, never a shadow, a gradient or a glow. No emoji.
+- The assistant never gets a bubble; only the user turn is filled. The send control becomes the stop
+  control in the same position while a run is in flight.
+
+The mockup these numbers come from is `design/archiel-mockup.html`: open it in a browser, drag to
+pan, ctrl+wheel to zoom, `F` to focus a board, `0` to fit. `design/spec.md` holds the measurements.
 
 ## Server
 
@@ -57,6 +68,14 @@ gh run download -n archiel-debug -D /tmp/archiel
 adb install -r /tmp/archiel/app-debug.apk
 ```
 
+## What it does
+
+- Lists the sessions on the server, with the last message of each as a one line preview.
+- Sends a message and renders the answer as it streams; the send button stops a run in place.
+- Shows tool calls with the command and the raw output, read only.
+- Keeps the stream alive with exponential backoff when the phone suspends the process.
+- The connection screen reports what the server actually says: version, latency, session count.
+
 ## Layout
 
 ```
@@ -64,7 +83,7 @@ app/src/main/java/dev/scdeal/archiel/
   OpenCodeClient.kt   HTTP + SSE client, serializable models
   ChatViewModel.kt    session list, stream state, errors
   MainActivity.kt     three screens: sessions / chat / connection
-  Theme.kt            the whole design system
+  Theme.kt            the whole design system, dark only
   Cfg.kt              server address + password (SharedPreferences)
 ```
 

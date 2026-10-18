@@ -63,6 +63,9 @@ data class PartState(
 data class PartText(val type: String? = null, val text: String? = null)
 
 @Serializable
+data class ServerInfo(val version: String? = null, val pid: Int? = null, val urls: List<String> = emptyList())
+
+@Serializable
 private class Data<T>(val data: List<T> = emptyList())
 
 @Serializable
@@ -83,8 +86,8 @@ internal class SseBuffer {
 }
 
 /**
- * opencode HTTP API'si (v2): Basic auth + api uçları, akış için /api/event (SSE).
- * Doğrulandı: opencode v2.0.32, openapi.json.
+ * opencode HTTP API (v2): Basic auth and the api endpoints, with an SSE stream for live answers.
+ * Verified against opencode v2.0.32 and its openapi.json.
  */
 class OpenCodeClient(baseUrl: String, private val password: String) {
     private val base = baseUrl.trimEnd('/')
@@ -116,6 +119,8 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
             }
         }
 
+    suspend fun info(): ServerInfo = json.decodeFromString(ServerInfo.serializer(), call("GET", "/api/info"))
+
     suspend fun sessions(): List<Session> =
         json.decodeFromString(Data.serializer(Session.serializer()), call("GET", "/api/session?limit=50")).data
 
@@ -127,6 +132,12 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
             .data
             .sortedBy { it.time?.created ?: 0L }
             .filter { it.type == "user" || it.type == "assistant" }
+
+    /** One message, newest first: the list preview only needs the tail of a session. */
+    suspend fun lastMessage(sessionID: String): Message? =
+        json.decodeFromString(Data.serializer(Message.serializer()), call("GET", "/api/session/$sessionID/message?limit=1&order=desc"))
+            .data
+            .firstOrNull()
 
     suspend fun send(sessionID: String, text: String) {
         call("POST", "/api/session/$sessionID/prompt", buildJsonObject { put("text", text) }.toString())
@@ -142,8 +153,8 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
         val reader = launch(Dispatchers.IO) {
             try {
                 httpCall.execute().use { r ->
-                    if (!r.isSuccessful) throw IOException("Olay akışı → ${r.code}")
-                    val source = (r.body ?: throw IOException("Olay akışı boş gövde")).source()
+                    if (!r.isSuccessful) throw IOException("The event stream → ${r.code}")
+                    val source = (r.body ?: throw IOException("The event stream returned nothing")).source()
                     val frames = SseBuffer()
                     while (true) {
                         val line = source.readUtf8Line() ?: break
@@ -164,4 +175,10 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
             httpCall.cancel()
         }
     }
+}
+
+/** The sentence a row shows under a title, whichever kind of message it came from. */
+fun Message.preview(): String {
+    val body = text ?: content.orEmpty().firstOrNull { it.type == "text" }?.text
+    return body.orEmpty().replace(Regex("\\s+"), " ").trim()
 }

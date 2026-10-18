@@ -1,7 +1,6 @@
-// Concept: "an engineer's panel — graphite ground, one amber signal, flat surfaces, measured type."
-// Tokens are the output of spec-mockup-design/scripts/palette.py (--hue 75 --mood crisp --scheme mono)
-// and scales.py (--target mobile --density normal), taken verbatim. Typefaces are the reference
-// project's own: Instrument Sans (body), Syne (display), DM Mono (code).
+// Tokens come from design/: palette.py --from-hex "#e0a458" --mood crisp --scheme mono, audited by
+// contrast.py. The structure is borrowed from lunanoir21/tally-omarchy: a ground, a text colour, one
+// accent, and two mixed from them. Dark only until the app earns a light variant.
 package dev.scdeal.archiel
 
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -10,7 +9,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -21,53 +19,31 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 
-private val Ink = darkColorScheme(
-    primary = Color(0xFFDB9E3D),
-    onPrimary = Color(0xFF000000),
-    primaryContainer = Color(0xFF312007),
-    onPrimaryContainer = Color(0xFFDB9E3D),
-    background = Color(0xFF100F0E),
-    onBackground = Color(0xFFF0EEEC),
-    surface = Color(0xFF161513),
-    onSurface = Color(0xFFF0EEEC),
-    surfaceVariant = Color(0xFF1B1A19),
-    onSurfaceVariant = Color(0xFFA09E9B),
-    surfaceContainer = Color(0xFF1B1A19),
-    surfaceContainerHigh = Color(0xFF1B1A19),
-    outline = Color(0xFF2A2928),
-    outlineVariant = Color(0xFF2A2928),
-    error = Color(0xFFF98478),
-    onError = Color(0xFF2A0906),
-    inverseSurface = Color(0xFFF0EEEC),
-    inverseOnSurface = Color(0xFF100F0E),
+private val Noir = darkColorScheme(
+    primary = Color(0xFFE0A458),
+    onPrimary = Color(0xFF14110C),
+    primaryContainer = Color(0xFF2A2013),
+    onPrimaryContainer = Color(0xFFE0A458),
+    background = Color(0xFF0F0F10),
+    onBackground = Color(0xFFECECEC),
+    surface = Color(0xFF17171A),
+    onSurface = Color(0xFFECECEC),
+    surfaceVariant = Color(0xFF1C1C1F),
+    onSurfaceVariant = Color(0xFFA8A8AD),
+    outline = Color(0xFF26262A),
+    outlineVariant = Color(0xFF26262A),
+    error = Color(0xFFDC615A),
+    onError = Color(0xFF1B0B0A),
 )
 
-private val Paper = lightColorScheme(
-    primary = Color(0xFF7E5403),
-    onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFFBE4C6),
-    onPrimaryContainer = Color(0xFF7E5403),
-    background = Color(0xFFF5F3F1),
-    onBackground = Color(0xFF131110),
-    surface = Color(0xFFFBF9F7),
-    onSurface = Color(0xFF131110),
-    surfaceVariant = Color(0xFFFEFDFC),
-    onSurfaceVariant = Color(0xFF6B6866),
-    surfaceContainer = Color(0xFFFEFDFC),
-    surfaceContainerHigh = Color(0xFFFEFDFC),
-    outline = Color(0xFFD9D7D5),
-    outlineVariant = Color(0xFFD9D7D5),
-    error = Color(0xFF9F322D),
-    onError = Color(0xFFFFFFFF),
-    inverseSurface = Color(0xFF131110),
-    inverseOnSurface = Color(0xFFF5F3F1),
-)
+/** Amber as a fill rather than as text: the same value in every surface, with ink on top of it. */
+val AccentFill = Color(0xFFE0A458)
+val OnAccent = Color(0xFF14110C)
 
 private val Instrument = FontFamily(
     Font(R.font.instrument_sans, FontWeight.Normal),
     Font(R.font.instrument_sans, FontWeight.Medium),
     Font(R.font.instrument_sans, FontWeight.SemiBold),
-    Font(R.font.instrument_sans, FontWeight.Bold),
 )
 
 private val Syne = FontFamily(Font(R.font.syne, FontWeight.Bold))
@@ -75,22 +51,22 @@ private val Syne = FontFamily(Font(R.font.syne, FontWeight.Bold))
 val Mono = FontFamily(Font(R.font.dm_mono, FontWeight.Normal))
 
 private val ArchielType = Typography(
-    displaySmall = TextStyle(fontFamily = Syne, fontSize = 33.sp, lineHeight = 38.sp, letterSpacing = (-0.01).em),
+    displaySmall = TextStyle(fontFamily = Syne, fontSize = 23.sp, lineHeight = 28.sp, letterSpacing = (-0.01).em),
     headlineSmall = TextStyle(fontFamily = Syne, fontSize = 23.sp, lineHeight = 28.sp, letterSpacing = (-0.01).em),
     titleLarge = TextStyle(fontFamily = Instrument, fontSize = 19.sp, lineHeight = 25.sp, fontWeight = FontWeight.Medium),
     titleMedium = TextStyle(fontFamily = Instrument, fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium),
     bodyLarge = TextStyle(fontFamily = Instrument, fontSize = 16.sp, lineHeight = 24.sp),
     bodyMedium = TextStyle(fontFamily = Instrument, fontSize = 13.5.sp, lineHeight = 20.sp),
     labelLarge = TextStyle(fontFamily = Instrument, fontSize = 13.5.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold),
-    labelSmall = TextStyle(fontFamily = Instrument, fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.04.em),
+    labelSmall = TextStyle(fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp, color = Color(0xFFA8A8AD)),
 )
 
 private val ArchielShapes = Shapes(
-    extraSmall = RoundedCornerShape(5.dp),
-    small = RoundedCornerShape(10.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(16.dp),
-    extraLarge = RoundedCornerShape(16.dp),
+    extraSmall = RoundedCornerShape(Radius.chip),
+    small = RoundedCornerShape(Radius.control),
+    medium = RoundedCornerShape(Radius.panel),
+    large = RoundedCornerShape(Radius.panel),
+    extraLarge = RoundedCornerShape(Radius.panel),
 )
 
 /** The 4 px ladder: 4 / 8 / 12 / 16 / 24 / 32 */
@@ -103,10 +79,28 @@ object Space {
     val xxl = 32.dp
 }
 
+object Radius {
+    val chip = 5.dp
+    val control = 10.dp
+    val panel = 16.dp
+    val pill = 999.dp
+}
+
+object Size {
+    val bar = 52.dp
+    val hit = 44.dp
+    val hitSmall = 40.dp
+    val dot = 6.dp
+    val row = 64.dp
+    val caretWidth = 8.dp
+    val caretHeight = 16.dp
+    val hairline = 1.dp
+}
+
 @Composable
-fun ArchielTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+fun ArchielTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (dark) Ink else Paper,
+        colorScheme = Noir,
         typography = ArchielType,
         shapes = ArchielShapes,
         content = content,

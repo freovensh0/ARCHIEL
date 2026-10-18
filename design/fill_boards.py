@@ -456,10 +456,7 @@ def tokens_board():
             ("text", "#ECECEC"), ("muted", "#A8A8AD"), ("faint", "#5D5D63"),
             ("accent", "#E0A458"), ("accent_fill", "#E0A458"), ("danger", "#DC615A"),
             ("ok", "#74BF85")]
-    light = [("bg", "#F6F4EF"), ("surface", "#FFFDF8"), ("line", "#DDD8CC"),
-             ("text", "#1B1A17"), ("muted", "#6B6862"), ("faint", "#A49E92"),
-             ("accent", "#7D5206"), ("accent_fill", "#E0A458"), ("danger", "#A3322C"),
-             ("ok", "#3D6B45")]
+    light = []
 
     def column(title, rows, fg, bg):
         sw = "".join(
@@ -496,9 +493,8 @@ def tokens_board():
         for r in ("5px", "10px", "16px", "999px")
     )
     left = (
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
-        + column("DARK", dark, "#ECECEC", "#0F0F10")
-        + column("LIGHT", light, "#1B1A17", "#F6F4EF")
+        '<div style="display:grid;grid-template-columns:1fr;gap:10px">'
+        + column("DARK, THE ONLY THEME FOR NOW", dark, "#ECECEC", "#0F0F10")
         + "</div>"
     )
     right = (

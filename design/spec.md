@@ -27,6 +27,11 @@ Rules that hold everywhere:
 - Status is never colour alone: the live dot always sits next to the word "connected" or "working".
 - The send control becomes the stop control in the same position while a run is in flight.
 
+## Theme
+
+Dark only for now. One ground, one accent, and the values below; there is no light variant to keep in
+step until the app earns one.
+
 ## Measurements
 
 - Top bar 52 px, title Syne 700 at 23/28, one 40 px hit target per action.
@@ -69,4 +74,4 @@ Turkish: the interface ships in English.
 ## Non-goals
 
 No Markdown rendering, no syntax highlighting, no permission prompts, no file attachments, no
-notification history, no theming picker. One accent, one danger, one mono.
+notification history, no theme picker and no light theme. One accent, one danger, one mono.
