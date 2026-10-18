@@ -84,9 +84,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         when {
             type == "session.text.delta" ->
                 _state.update { it.copy(busy = true, stream = it.stream + data.str("delta").orEmpty()) }
-            type == "session.execution.started" ->
+            type == "session.execution.started" -> {
                 _state.update { it.copy(busy = true, cutShort = false) }
                 pollPermissions()
+            }
             type == "session.execution.succeeded" -> {
                 _state.update { it.copy(busy = false, stream = "") }
                 loadMessages()
