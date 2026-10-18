@@ -72,6 +72,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -627,7 +628,7 @@ private fun AssistantTurn(text: String, streaming: Boolean = false) {
     }
 }
 
-private sealed interface Block {
+internal sealed interface Block {
     data class Paragraph(val text: String) : Block
     data class Code(val lines: List<String>, val language: String?) : Block
 }
