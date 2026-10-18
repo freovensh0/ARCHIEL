@@ -62,6 +62,7 @@ data class MessageTime(val created: Long = 0)
 
 @Serializable
 data class Part(
+    val id: String? = null,
     val type: String? = null,
     val text: String? = null,
     val name: String? = null,

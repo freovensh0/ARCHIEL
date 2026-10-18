@@ -10,7 +10,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlin.math.min
 
 data class ChatState(
@@ -28,6 +31,7 @@ data class ChatState(
     val messages: List<Message> = emptyList(),
     val stream: String = "",
     val thinking: String = "",
+    val tools: List<Part> = emptyList(),
     val busy: Boolean = false,
     val cutShort: Boolean = false,
     val loading: Boolean = false,
@@ -91,12 +95,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             // The thinking phase often runs alone for a while; a bounded tail keeps it cheap.
             type == "session.reasoning.delta" ->
                 _state.update { it.copy(busy = true, thinking = (it.thinking + data.str("delta").orEmpty()).takeLast(2000)) }
+            // Tools stream the whole call: the command shows the moment the agent names it.
+            type == "session.tool.input.started" ->
+                upsertTool(data.str("id")) { it.copy(name = data.str("name"), state = PartState(status = "running")) }
+            type == "session.tool.called" ->
+                upsertTool(data.str("id")) { it.copy(state = it.state?.copy(input = data["input"] as? JsonObject) ?: PartState(status = "running", input = data["input"] as? JsonObject)) }
+            type == "session.tool.success" ->
+                upsertTool(data.str("id")) { it.copy(state = (it.state ?: PartState()).copy(status = "completed", content = toolOutput(data))) }
+            type == "session.tool.failed" ->
+                upsertTool(data.str("id")) { it.copy(state = (it.state ?: PartState()).copy(status = "error", content = toolOutput(data))) }
             type == "session.execution.started" -> {
-                _state.update { it.copy(busy = true, cutShort = false) }
+                _state.update { it.copy(busy = true, cutShort = false, tools = emptyList()) }
                 pollPermissions()
             }
             type == "session.execution.succeeded" -> {
-                _state.update { it.copy(busy = false, stream = "", thinking = "") }
+                _state.update { it.copy(busy = false, stream = "", thinking = "", tools = emptyList()) }
                 loadMessages()
             }
             "error" in type ->
@@ -105,11 +118,28 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         busy = false,
                         cutShort = true,
                         thinking = "",
+                        tools = emptyList(),
                         error = "The server reported an error: ${data.toString().take(160)}",
                     )
                 }
         }
     }
+
+    /** Live tool sections are keyed by the call id the server assigns. */
+    private fun upsertTool(id: String?, patch: (Part) -> Part) {
+        if (id == null) return
+        _state.update { s ->
+            s.copy(
+                tools = if (s.tools.any { it.id == id }) s.tools.map { if (it.id == id) patch(it) else it }
+                else s.tools + patch(Part(id = id)),
+            )
+        }
+    }
+
+    private fun toolOutput(data: JsonObject) =
+        (data["content"] as? JsonArray)?.mapNotNull { o ->
+            ((o as? JsonObject)?.get("text") as? JsonPrimitive)?.contentOrNull?.let { PartText(text = it) }
+        }
 
     /** The event feed does not name permission updates, so a run in flight polls them. */
     private fun pollPermissions() {
@@ -151,7 +181,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun runCommand(name: String, arguments: String) {
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
-            _state.update { it.copy(busy = true, cutShort = false, thinking = "", error = null) }
+            _state.update { it.copy(busy = true, cutShort = false, thinking = "", tools = emptyList(), error = null) }
             runCatching { client.runCommand(id, name, arguments) }
                 .onSuccess { pollPermissions() }
                 .onFailure { e -> _state.update { it.copy(busy = false, error = "Could not run /$name: ${e.message}") } }
@@ -197,6 +227,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 messages = emptyList(),
                 stream = "",
                 thinking = "",
+                tools = emptyList(),
                 cutShort = false,
                 error = null,
             )
@@ -206,7 +237,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun close() {
         _state.update {
-            it.copy(sessionId = null, messages = emptyList(), stream = "", thinking = "", busy = false, cutShort = false, permissions = emptyList())
+            it.copy(sessionId = null, messages = emptyList(), stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList())
         }
     }
 
@@ -231,6 +262,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     busy = true,
                     cutShort = false,
                     thinking = "",
+                    tools = emptyList(),
                     error = null,
                 )
             }

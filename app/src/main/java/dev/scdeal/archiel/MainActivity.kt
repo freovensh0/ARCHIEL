@@ -482,7 +482,7 @@ private fun ChatScreen(
             }
             items(state.messages, key = { it.id }) { message -> Turn(message) }
             if (state.busy) {
-                item("live") { LiveTurn(state.thinking, state.stream) }
+                item("live") { LiveTurn(state.tools, state.thinking, state.stream) }
             }
         }
         state.permissions.firstOrNull()?.let { request ->
@@ -641,9 +641,9 @@ private fun AssistantTurn(text: String, streaming: Boolean = false) {
     }
 }
 
-/** The live turn while a run streams: the reasoning tail first, then the answer as it arrives. */
+/** The live turn while a run streams: thinking tail, tool calls as they run, then the answer. */
 @Composable
-private fun LiveTurn(thinking: String, text: String) {
+private fun LiveTurn(tools: List<Part>, thinking: String, text: String) {
     Column(Modifier.fillMaxWidth().padding(horizontal = Space.l)) {
         if (thinking.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -661,6 +661,7 @@ private fun LiveTurn(thinking: String, text: String) {
             }
             Spacer(Modifier.height(Space.m))
         }
+        tools.forEach { ToolBlock(it) }
         if (text.isNotEmpty()) AssistantTurn(text, streaming = true)
     }
 }

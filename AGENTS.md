@@ -20,7 +20,9 @@ English one with a comment naming the locale.
   UI does not cross sessions.
 - The server sends `session.execution.succeeded`, not a final message. Treat it as the signal to reload
   messages, and keep the streamed text only as an optimistic preview. `session.reasoning.delta` feeds
-  the live "thinking" strip; both previews are dropped when the reload lands.
+  the live "thinking" strip; both previews are dropped when the reload lands. Tool calls stream on the
+  wire too: `session.tool.*` events keyed by the call id build the live tool block, cleared and replaced
+  by the message's finished tool part on reload.
 - `ChatViewModel` is an `AndroidViewModel` and builds its client from `Cfg`, so changing the server
   password means recreating it. `App()` keys the view model on the config for that reason.
 - No dependency injection, no database, no navigation library. Three screens and a switch are enough;

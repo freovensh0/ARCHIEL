@@ -1,6 +1,8 @@
 package dev.scdeal.archiel
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -37,12 +39,28 @@ class ApiModelsTest {
     fun `a reasoning part keeps its text and the time it took`() {
         val row = """
             {"id":"prt_1","type":"reasoning",
-             "text":"**Inspecting the ARK layout**\n\nNeed to surface space for the session list.",
+             "text":"**Inspecting the ARCHIEL layout**\n\nNeed to surface room for the session list.",
              "time":{"created":1000,"completed":43000}}
         """.trimIndent()
         val part = json.decodeFromString(Part.serializer(), row)
         assertEquals("reasoning", part.type)
         assertEquals(true, part.text?.startsWith("**Inspecting"))
         assertEquals(43000L, part.time?.completed)
+    }
+
+    @Test
+    fun `a tool part decodes with its call id and full state`() {
+        val row = """
+            {"type":"tool","id":"call-1","name":"shell","executed":false,
+             "state":{"status":"completed","input":{"command":"echo hi"},
+                      "content":[{"type":"text","text":"hi\n"}],"metadata":{"exit":0}},
+             "time":{"created":1,"ran":2,"completed":3}}
+        """.trimIndent()
+        val part = json.decodeFromString(Part.serializer(), row)
+        assertEquals("call-1", part.id)
+        assertEquals("shell", part.name)
+        val command = part.state?.input?.get("command")
+        assertEquals("echo hi", (command as? JsonPrimitive)?.contentOrNull)
+        assertEquals("hi\n", part.state?.content?.firstOrNull()?.text)
     }
 }
