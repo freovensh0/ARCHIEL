@@ -70,7 +70,7 @@ private class One<T>(val data: T)
 
 internal fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 
-/** SSE kare biriktirici: "data:" satırlarını biriktirir, boş satırda tamamlanmış olayı döndürür. */
+/** SSE frame buffer: accumulates "data:" lines, returns the event once a blank line closes it. */
 internal class SseBuffer {
     private val data = StringBuilder()
 
@@ -90,12 +90,12 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
     private val base = baseUrl.trimEnd('/')
     private val json = Json { ignoreUnknownKeys = true }
 
-    // readTimeout 0: SSE bağlantısı uzun süre sessiz kalabilir.
+    // readTimeout 0: the stream stays silent for long stretches between events.
     private val http = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
-    // opencode sunucusu Basic auth istiyor; kullanıcı adı "opencode", parola sunucuda üretiliyor.
+    // The server checks Basic auth; the user name is fixed, the password is printed at startup.
     private val auth: String = "Basic " + Base64.encodeToString(
         "opencode:$password".toByteArray(Charsets.UTF_8),
         Base64.NO_WRAP,
@@ -136,7 +136,7 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
         call("POST", "/api/session/$sessionID/interrupt", "{}")
     }
 
-    /** Sunucudaki tüm oturumların olayları; çağıran sessionID'ye göre süzer. Yeniden bağlanma yok. */
+    /** Live events for every session on the server. The caller filters by sessionID. No replay. */
     fun events(): Flow<JsonObject> = callbackFlow {
         val httpCall = http.newCall(request("/api/event").build())
         val reader = launch(Dispatchers.IO) {

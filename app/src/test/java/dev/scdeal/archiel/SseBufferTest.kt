@@ -10,22 +10,22 @@ class SseBufferTest {
     }
 
     @Test
-    fun `olay bos satirda tamamlanir`() {
+    fun `an event closes on the blank line`() {
         val out = frames("data: {\"type\":\"a\"}", "")
         assertNull(out[0])
         assertEquals("{\"type\":\"a\"}", out[1])
     }
 
     @Test
-    fun `cok satirli veri birlestirilir`() {
-        // SSE kurali: cok satirli alanin her satiri "data:" onekiyle gelir.
+    fun `multi line data is joined`() {
+        // Every line of a multi line SSE field carries its own "data:" prefix.
         val out = frames("data: {\"type\":", "data: \"x\"}", "")
         assertNull(out[1])
         assertEquals("{\"type\":" + "\"x\"}", out[2])
     }
 
     @Test
-    fun `heartbeat ve bosluklar olay uretmez`() {
+    fun `heartbeats and blank lines produce nothing`() {
         val buf = SseBuffer()
         assertNull(buf.push(": heartbeat"))
         assertNull(buf.push(""))
@@ -35,7 +35,7 @@ class SseBufferTest {
     }
 
     @Test
-    fun `iki olay ardisik ayrilir`() {
+    fun `two events in a row stay separate`() {
         val out = frames("data: {\"n\":1}", "", "data: {\"n\":2}", "")
         assertEquals("{\"n\":1}", out[1])
         assertEquals("{\"n\":2}", out[3])

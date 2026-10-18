@@ -5,10 +5,10 @@ import android.content.Context
 data class ServerConfig(val baseUrl: String, val password: String)
 
 object Cfg {
-    /** Emülatörde host makine 10.0.2.2, telefonda Termux ise 127.0.0.1 */
+    /** The emulator reaches the host machine at 10.0.2.2; in Termux the server is on 127.0.0.1. */
     const val DEFAULT_URL = "http://10.0.2.2:4096"
 
-    // shortcut: parola düz SharedPreferences'ta; cihaz ele geçerse sunucu parolası ele geçer.
+    // shortcut: the password is stored unencrypted; anyone with the device reaches the server.
     private const val FILE = "archiel"
 
     fun load(ctx: Context): ServerConfig {

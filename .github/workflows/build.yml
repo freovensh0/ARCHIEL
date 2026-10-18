@@ -23,7 +23,7 @@ jobs:
       # ubuntu-latest imajında SDK ve lisanslar hazır geliyor.
       - run: yes | sdkmanager --licenses > /dev/null || true
 
-      - name: Birim testleri + derle
+      - name: Unit tests and build
         run: ./gradlew testDebugUnitTest assembleDebug
 
       - uses: actions/upload-artifact@v4

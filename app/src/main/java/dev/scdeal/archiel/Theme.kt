@@ -1,7 +1,7 @@
-// Concept: "Bir mühendis panosu: kömür grisi zemin, tek amber sinyal, düz yüzeyler, ölçülü tipografi."
-// Token'lar spec-mockup-design/scripts/palette.py (--hue 75 --mood crisp --scheme mono)
-// ve scales.py (--target mobile --density normal) çıktılarından birebir alındı.
-// Yazı tipleri referans projenin kendi fontları: Instrument Sans (gövde), Syne (display), DM Mono (kod).
+// Concept: "an engineer's panel — graphite ground, one amber signal, flat surfaces, measured type."
+// Tokens are the output of spec-mockup-design/scripts/palette.py (--hue 75 --mood crisp --scheme mono)
+// and scales.py (--target mobile --density normal), taken verbatim. Typefaces are the reference
+// project's own: Instrument Sans (body), Syne (display), DM Mono (code).
 package dev.scdeal.archiel
 
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -93,7 +93,7 @@ private val ArchielShapes = Shapes(
     extraLarge = RoundedCornerShape(16.dp),
 )
 
-/** 4 px tabanlı merdiven: 4 / 8 / 12 / 16 / 24 / 32 */
+/** The 4 px ladder: 4 / 8 / 12 / 16 / 24 / 32 */
 object Space {
     val xs = 4.dp
     val s = 8.dp

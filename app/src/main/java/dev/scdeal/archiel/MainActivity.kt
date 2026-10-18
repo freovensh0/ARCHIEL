@@ -116,7 +116,7 @@ private fun App() {
     }
 }
 
-// ---------------------------------------------------------------- oturumlar
+// ---------------------------------------------------------------- sessions
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -134,10 +134,10 @@ private fun SessionsScreen(
                 title = { Text("ARCHIEL", style = MaterialTheme.typography.headlineSmall) },
                 actions = {
                     IconButton(onClick = onRefresh) {
-                        Icon(Icons.Outlined.Refresh, "Yenile", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.Outlined.Refresh, "Refresh", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     IconButton(onClick = onSettings) {
-                        Icon(Icons.Outlined.Settings, "Bağlantı ayarları", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.Outlined.Settings, "Connection settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -152,17 +152,17 @@ private fun SessionsScreen(
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
                 shape = CircleShape,
-            ) { Icon(Icons.Outlined.Add, "Yeni oturum") }
+            ) { Icon(Icons.Outlined.Add, "New session") }
         },
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             NoticeBar(state.error)
             when {
                 state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CenterHint("Oturumlar alınıyor…")
+                    CenterHint("Loading sessions…")
                 }
                 state.sessions.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CenterHint("Henüz oturum yok.\nSağ alttaki + ile ilk sohbeti başlat.")
+                    CenterHint("No sessions yet.\nStart the first chat with the button below.")
                 }
                 else -> LazyColumn(Modifier.fillMaxSize()) {
                     items(state.sessions, key = { it.id }) { session ->
@@ -173,7 +173,7 @@ private fun SessionsScreen(
                                 .padding(horizontal = Space.l, vertical = Space.m),
                         ) {
                             Text(
-                                session.title?.takeIf { it.isNotBlank() } ?: "Adsız oturum",
+                                session.title?.takeIf { it.isNotBlank() } ?: "Untitled session",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
@@ -194,7 +194,7 @@ private fun SessionsScreen(
     }
 }
 
-// ---------------------------------------------------------------- sohbet
+// ---------------------------------------------------------------- chat
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -213,12 +213,12 @@ private fun ChatScreen(state: ChatState, onBack: () -> Unit, onSend: (String) ->
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Geri", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
                 title = {
                     Text(
-                        state.title?.takeIf { it.isNotBlank() } ?: "Sohbet",
+                        state.title?.takeIf { it.isNotBlank() } ?: "Chat",
                         style = MaterialTheme.typography.titleLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -248,7 +248,7 @@ private fun ChatScreen(state: ChatState, onBack: () -> Unit, onSend: (String) ->
         ) {
             if (state.messages.isEmpty() && state.stream.isEmpty()) {
                 item("empty") {
-                    CenterHint("Sohbete başla. Mesajların sunucudaki opencode oturumunda işlenir.")
+                    CenterHint("Start here. Messages run in the opencode session on the server.")
                 }
             }
             items(state.messages, key = { it.id }) { message -> MessageBlock(message) }
@@ -276,7 +276,7 @@ private fun Composer(
             value = input,
             onValueChange = onInput,
             placeholder = {
-                Text("Mesajını yaz…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Write a message…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             },
             textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
             shape = RoundedCornerShape(16.dp),
@@ -304,7 +304,7 @@ private fun Composer(
             } else {
                 Icon(
                     Icons.Outlined.Send,
-                    "Gönder",
+                    "Send",
                     modifier = Modifier.size(20.dp),
                     tint = if (sendable) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -336,7 +336,7 @@ private fun MessageBlock(message: Message) {
         val parts = message.content.orEmpty()
         if (parts.isEmpty() && message.outcome == "failed") {
             Text(
-                "Yanıt üretilemedi.",
+                "No answer came back.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -345,7 +345,7 @@ private fun MessageBlock(message: Message) {
             when (part.type) {
                 "text" -> Answer(part.text.orEmpty())
                 "tool" -> ToolLine(part)
-                else -> Unit // reasoning: sürüm 1'de gizli
+                else -> Unit // reasoning: hidden in v1
             }
         }
     }
@@ -404,7 +404,7 @@ private fun ToolLine(part: Part) {
     }
 }
 
-// ---------------------------------------------------------------- ayarlar
+// ---------------------------------------------------------------- connection
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -418,10 +418,10 @@ private fun SettingsScreen(cfg: ServerConfig, onBack: () -> Unit, onSave: (Serve
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Geri", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
-                title = { Text("Bağlantı", style = MaterialTheme.typography.titleLarge) },
+                title = { Text("Connection", style = MaterialTheme.typography.titleLarge) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
@@ -430,13 +430,13 @@ private fun SettingsScreen(cfg: ServerConfig, onBack: () -> Unit, onSave: (Serve
         },
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize().padding(Space.l)) {
-            Field("Sunucu adresi", url, { url = it }, "http://10.0.2.2:4096")
+            Field("Server address", url, { url = it }, "http://10.0.2.2:4096")
             Spacer(Modifier.height(Space.m))
-            Field("Parola", password, { password = it }, "opencode serve yazdırır", secret = true)
+            Field("Password", password, { password = it }, "printed by opencode serve", secret = true)
             Spacer(Modifier.height(Space.l))
             Text(
-                "Parolayı sunucuyu başlattığın terminalde görürsün: opencode serve satırının altındaki " +
-                    "\"server password\". Termux'ta çalıştırıyorsan adres 127.0.0.1:4096 olur.",
+                "The password is the \"server password\" line that opencode serve prints when it starts. " +
+                    "If the server runs in Termux on this phone, the address is 127.0.0.1:4096.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -449,7 +449,7 @@ private fun SettingsScreen(cfg: ServerConfig, onBack: () -> Unit, onSave: (Serve
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
                 ),
-            ) { Text("Kaydet", style = MaterialTheme.typography.labelLarge) }
+            ) { Text("Save", style = MaterialTheme.typography.labelLarge) }
         }
     }
 }
@@ -485,7 +485,7 @@ private fun Field(
     )
 }
 
-// ---------------------------------------------------------------- parçalar
+// ---------------------------------------------------------------- parts
 
 @Composable
 private fun NoticeBar(text: String?) {
@@ -514,4 +514,4 @@ private fun CenterHint(text: String) {
 }
 
 private fun stamp(ms: Long?): String =
-    if (ms == null || ms <= 0L) "zaman bilgisi yok" else SimpleDateFormat("d MMM yyyy · HH:mm", TR).format(Date(ms))
+    if (ms == null || ms <= 0L) "no timestamp" else SimpleDateFormat("d MMM yyyy · HH:mm", TR).format(Date(ms))

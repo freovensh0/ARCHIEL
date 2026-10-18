@@ -34,7 +34,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             client.events()
                 .retryWhen { cause, _ ->
-                    _state.update { it.copy(error = "Olay akışı kesildi, yeniden bağlanılıyor: ${cause.message}") }
+                    _state.update { it.copy(error = "The event stream dropped, reconnecting: ${cause.message}") }
                     delay(3_000)
                     true
                 }
@@ -57,7 +57,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 loadMessages()
             }
             "error" in type ->
-                _state.update { it.copy(busy = false, error = "Sunucu hata verdi: ${data.toString().take(160)}") }
+                _state.update { it.copy(busy = false, error = "The server reported an error: ${data.toString().take(160)}") }
         }
     }
 
@@ -65,7 +65,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(loading = true) }
         runCatching { client.sessions() }
             .onSuccess { list -> _state.update { it.copy(sessions = list, loading = false, error = null) } }
-            .onFailure { e -> _state.update { it.copy(loading = false, error = "Oturumlar alınamadı: ${e.message}") } }
+            .onFailure { e -> _state.update { it.copy(loading = false, error = "Could not load sessions: ${e.message}") } }
     }
 
     fun open(id: String) {
@@ -92,7 +92,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 open(s.id)
                 onCreated(s.id)
             }
-            .onFailure { e -> _state.update { it.copy(error = "Oturum açılamadı: ${e.message}") } }
+            .onFailure { e -> _state.update { it.copy(error = "Could not open a session: ${e.message}") } }
     }
 
     fun send(text: String) {
@@ -108,7 +108,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             runCatching { client.send(id, body) }
-                .onFailure { e -> _state.update { it.copy(busy = false, error = "Mesaj gönderilemedi: ${e.message}") } }
+                .onFailure { e -> _state.update { it.copy(busy = false, error = "Could not send the message: ${e.message}") } }
         }
     }
 
@@ -116,7 +116,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
             runCatching { client.interrupt(id) }
-                .onFailure { e -> _state.update { it.copy(error = "Durdurulamadı: ${e.message}") } }
+                .onFailure { e -> _state.update { it.copy(error = "Could not stop it: ${e.message}") } }
         }
     }
 
@@ -125,7 +125,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { client.messages(id) }
                 .onSuccess { msgs -> _state.update { it.copy(messages = msgs) } }
-                .onFailure { e -> _state.update { it.copy(error = "Mesajlar alınamadı: ${e.message}") } }
+                .onFailure { e -> _state.update { it.copy(error = "Could not load the messages: ${e.message}") } }
         }
     }
 }
