@@ -83,7 +83,7 @@ internal class SseBuffer {
 }
 
 /**
- * opencode HTTP API'si (v2): Basic auth + /api/* uçları, akış için /api/event (SSE).
+ * opencode HTTP API'si (v2): Basic auth + api uçları, akış için /api/event (SSE).
  * Doğrulandı: opencode v2.0.32, openapi.json.
  */
 class OpenCodeClient(baseUrl: String, password: String) {

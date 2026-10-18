@@ -87,7 +87,6 @@ private fun App() {
     val ctx = LocalContext.current
     var cfg by remember { mutableStateOf(Cfg.load(ctx)) }
     var screen by rememberSaveable { mutableStateOf(Screen.Sessions) }
-    var openID by rememberSaveable { mutableStateOf("") }
     val vm: ChatViewModel = viewModel(key = "${cfg.baseUrl}|${cfg.password}")
     val state by vm.state.collectAsState()
 
@@ -96,8 +95,8 @@ private fun App() {
     when (screen) {
         Screen.Sessions -> SessionsScreen(
             state = state,
-            onOpen = { vm.open(it); openID = it; screen = Screen.Chat },
-            onNew = { vm.newSession { openID = it; screen = Screen.Chat } },
+            onOpen = { vm.open(it); screen = Screen.Chat },
+            onNew = { vm.newSession { screen = Screen.Chat } },
             onRefresh = vm::refresh,
             onSettings = { screen = Screen.Settings },
         )
@@ -159,8 +158,12 @@ private fun SessionsScreen(
         Column(Modifier.padding(pad).fillMaxSize()) {
             NoticeBar(state.error)
             when {
-                state.loading -> CenterHint("Oturumlar alınıyor…")
-                state.sessions.isEmpty() -> CenterHint("Henüz oturum yok.\nSağ alttaki + ile ilk sohbeti başlat.")
+                state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CenterHint("Oturumlar alınıyor…")
+                }
+                state.sessions.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CenterHint("Henüz oturum yok.\nSağ alttaki + ile ilk sohbeti başlat.")
+                }
                 else -> LazyColumn(Modifier.fillMaxSize()) {
                     items(state.sessions, key = { it.id }) { session ->
                         Column(
@@ -491,7 +494,8 @@ private fun NoticeBar(text: String?) {
 
 @Composable
 private fun CenterHint(text: String) {
-    Box(Modifier.fillMaxSize().padding(Space.xl), contentAlignment = Alignment.Center) {
+    // LazyColumn içinde fillMaxSize yerine sabit min yükseklik: liste sonsuz yükseklik verir.
+    Box(Modifier.fillMaxWidth().heightIn(min = 220.dp).padding(Space.xl), contentAlignment = Alignment.Center) {
         Text(
             text,
             style = MaterialTheme.typography.bodyLarge,

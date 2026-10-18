@@ -75,14 +75,14 @@ private val Syne = FontFamily(Font(R.font.syne, FontWeight.Bold))
 val Mono = FontFamily(Font(R.font.dm_mono, FontWeight.Normal))
 
 private val ArchielType = Typography(
-    displaySmall = TextStyle(Syne, fontSize = 33.sp, lineHeight = 38.sp, letterSpacing = (-0.01).em),
-    headlineSmall = TextStyle(Syne, fontSize = 23.sp, lineHeight = 28.sp, letterSpacing = (-0.01).em),
-    titleLarge = TextStyle(Instrument, fontSize = 19.sp, lineHeight = 25.sp, fontWeight = FontWeight.Medium),
-    titleMedium = TextStyle(Instrument, fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium),
-    bodyLarge = TextStyle(Instrument, fontSize = 16.sp, lineHeight = 24.sp),
-    bodyMedium = TextStyle(Instrument, fontSize = 13.5.sp, lineHeight = 20.sp),
-    labelLarge = TextStyle(Instrument, fontSize = 13.5.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold),
-    labelSmall = TextStyle(Instrument, fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.04.em),
+    displaySmall = TextStyle(fontFamily = Syne, fontSize = 33.sp, lineHeight = 38.sp, letterSpacing = (-0.01).em),
+    headlineSmall = TextStyle(fontFamily = Syne, fontSize = 23.sp, lineHeight = 28.sp, letterSpacing = (-0.01).em),
+    titleLarge = TextStyle(fontFamily = Instrument, fontSize = 19.sp, lineHeight = 25.sp, fontWeight = FontWeight.Medium),
+    titleMedium = TextStyle(fontFamily = Instrument, fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium),
+    bodyLarge = TextStyle(fontFamily = Instrument, fontSize = 16.sp, lineHeight = 24.sp),
+    bodyMedium = TextStyle(fontFamily = Instrument, fontSize = 13.5.sp, lineHeight = 20.sp),
+    labelLarge = TextStyle(fontFamily = Instrument, fontSize = 13.5.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold),
+    labelSmall = TextStyle(fontFamily = Instrument, fontSize = 11.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium, letterSpacing = 0.04.em),
 )
 
 private val ArchielShapes = Shapes(
