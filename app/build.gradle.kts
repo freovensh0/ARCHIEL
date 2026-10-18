@@ -1,20 +1,27 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.compose)
     alias(libs.plugins.kotlin.serialization)
 }
 
 android {
     namespace = "dev.scdeal.archiel"
-    compileSdk = 36
+    compileSdk = libs.versions.compileSdk.get().toInt()
 
     defaultConfig {
         applicationId = "dev.scdeal.archiel"
-        minSdk = 26
-        targetSdk = 36
+        minSdk = libs.versions.minSdk.get().toInt()
+        targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1
         versionName = "0.1"
+    }
+
+    kotlin {
+        compilerOptions {
+            jvmTarget = JvmTarget.fromTarget("17")
+        }
     }
 
     compileOptions {
@@ -27,18 +34,17 @@ android {
     }
 }
 
-kotlin {
-    jvmToolchain(17)
-}
-
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.okhttp)
+    implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.okhttp)
 
     testImplementation(libs.junit)
 }

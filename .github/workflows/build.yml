@@ -12,14 +12,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # setup-android@v3 kırık (içeriden kaldırılmış "sdkmanager tools" paketini çağırıyor).
+      # setup-android@v3 kırık (kaldırılmış "sdkmanager tools" paketini çağırıyor).
       # ubuntu-latest imajında SDK ve lisanslar hazır geliyor.
       - run: yes | sdkmanager --licenses > /dev/null || true
 

@@ -33,8 +33,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     init {
         viewModelScope.launch {
             client.events()
-                .retryWhen { _, e ->
-                    _state.update { it.copy(error = "Olay akışı kesildi, yeniden bağlanılıyor: ${e.message}") }
+                .retryWhen { cause, _ ->
+                    _state.update { it.copy(error = "Olay akışı kesildi, yeniden bağlanılıyor: ${cause.message}") }
                     delay(3_000)
                     true
                 }

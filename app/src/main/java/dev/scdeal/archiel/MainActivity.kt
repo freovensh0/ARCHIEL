@@ -26,7 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
@@ -213,7 +213,7 @@ private fun ChatScreen(state: ChatState, onBack: () -> Unit, onSend: (String) ->
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Outlined.ArrowBack, "Geri", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Geri", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
                 title = {
@@ -230,7 +230,15 @@ private fun ChatScreen(state: ChatState, onBack: () -> Unit, onSend: (String) ->
                 ),
             )
         },
-        bottomBar = { Composer(input, { input = it }, state.busy, onSend, onStop) },
+        bottomBar = {
+            Composer(
+                input = input,
+                onInput = { input = it },
+                busy = state.busy,
+                onSend = { onSend(input); input = "" },
+                onStop = onStop,
+            )
+        },
     ) { pad ->
         LazyColumn(
             state = list,
@@ -410,7 +418,7 @@ private fun SettingsScreen(cfg: ServerConfig, onBack: () -> Unit, onSave: (Serve
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Outlined.ArrowBack, "Geri", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Geri", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
                 title = { Text("Bağlantı", style = MaterialTheme.typography.titleLarge) },
@@ -505,5 +513,5 @@ private fun CenterHint(text: String) {
     }
 }
 
-private fun stamp(ms: Long): String =
-    if (ms <= 0L) "zaman bilgisi yok" else SimpleDateFormat("d MMM yyyy · HH:mm", TR).format(Date(ms))
+private fun stamp(ms: Long?): String =
+    if (ms == null || ms <= 0L) "zaman bilgisi yok" else SimpleDateFormat("d MMM yyyy · HH:mm", TR).format(Date(ms))

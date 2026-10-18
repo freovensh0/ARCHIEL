@@ -1,5 +1,6 @@
 package dev.scdeal.archiel
 
+import android.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -15,7 +16,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
-import okhttp3.Credentials.Companion.basic
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -86,7 +86,7 @@ internal class SseBuffer {
  * opencode HTTP API'si (v2): Basic auth + api uçları, akış için /api/event (SSE).
  * Doğrulandı: opencode v2.0.32, openapi.json.
  */
-class OpenCodeClient(baseUrl: String, password: String) {
+class OpenCodeClient(baseUrl: String, private val password: String) {
     private val base = baseUrl.trimEnd('/')
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -95,9 +95,15 @@ class OpenCodeClient(baseUrl: String, password: String) {
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
+    // opencode sunucusu Basic auth istiyor; kullanıcı adı "opencode", parola sunucuda üretiliyor.
+    private val auth: String = "Basic " + Base64.encodeToString(
+        "opencode:$password".toByteArray(Charsets.UTF_8),
+        Base64.NO_WRAP,
+    )
+
     private fun request(path: String) = Request.Builder()
         .url(base + path)
-        .header("Authorization", basic("opencode", password))
+        .header("Authorization", auth)
 
     private suspend fun call(method: String, path: String, body: String? = null): String =
         withContext(Dispatchers.IO) {
