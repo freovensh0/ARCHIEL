@@ -7,3 +7,5 @@ local.properties
 /captures
 .externalNativeBuild
 .cxx
+design/shots/
+design/palette.html
