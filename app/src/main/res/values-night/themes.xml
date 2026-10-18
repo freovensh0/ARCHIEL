@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Archiel" parent="@android:style/Theme.Material.NoActionBar" />
+</resources>
