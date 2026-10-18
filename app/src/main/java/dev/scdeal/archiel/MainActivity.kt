@@ -759,8 +759,8 @@ internal fun parseBlocks(source: String): List<Block> {
     fun flush() {
         if (buffer.any { it.isNotBlank() }) {
             blocks += Block.Paragraph(buffer.joinToString("\n").trimEnd())
-            buffer.clear()
         }
+        buffer.clear()
     }
     var i = 0
     while (i < lines.size) {
