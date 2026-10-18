@@ -24,6 +24,7 @@ data class ChatState(
     val previews: Map<String, String> = emptyMap(),
     val sessionId: String? = null,
     val title: String? = null,
+    val location: String? = null,
     val messages: List<Message> = emptyList(),
     val stream: String = "",
     val busy: Boolean = false,
@@ -61,10 +62,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 .collect { handleEvent(it) }
         }
         refresh()
-        viewModelScope.launch {
-            runCatching { client.commands() }
-                .onSuccess { list -> _state.update { it.copy(commands = list) } }
-        }
+    }
+
+    /** The server registers plugins after it starts, so the dock refetches commands instead of caching them. */
+    fun loadCommands() = viewModelScope.launch {
+        runCatching { client.commands(_state.value.location) }
+            .onSuccess { list -> _state.update { it.copy(commands = list) } }
     }
 
     /** Both pickers are fetched the first time they are opened, not on every start. */
@@ -182,6 +185,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 sessionId = id,
                 model = existing?.model?.label(),
                 agent = existing?.agent,
+                location = existing?.location?.directory,
+                commands = emptyList(),
                 permissions = emptyList(),
                 title = it.sessions.firstOrNull { s -> s.id == id }?.title,
                 messages = emptyList(),

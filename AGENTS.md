@@ -43,8 +43,11 @@ The visual language is defined once in `Theme.kt` and nowhere else.
 
 ## Before every commit
 
-1. `./gradlew testDebugUnitTest assembleDebug` passes. Add a test when you touch `SseBuffer` or the
-   serializable models; the stream framing is the one place a silent break is invisible.
+1. GitHub Actions is the build machine: it runs `./gradlew testDebugUnitTest assembleDebug` on every
+   push and pull request and uploads the debug APK. The development machine has no Android SDK and
+   needs none — install nothing locally, read the run with `gh run list` / `gh run watch` instead.
+   Add a test when you touch `SseBuffer` or the serializable models; the stream framing is the one
+   place a silent break is invisible.
 2. UI strings are English and say what happened and what to do next. No "Oops", no exclamation marks.
 3. Look at it. Open the screen on a phone or emulator, in both light and dark, with a long session
    title and a long message.

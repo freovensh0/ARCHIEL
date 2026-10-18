@@ -129,6 +129,7 @@ private fun App() {
             onRunCommand = vm::runCommand,
             onReplyPermission = vm::replyPermission,
             onOpenPickers = { vm.loadPickers(); screen = Screen.Pickers },
+            onLoadCommands = vm::loadCommands,
         )
 
         Screen.Pickers -> PickerScreen(
@@ -159,12 +160,13 @@ private fun App() {
 @Composable
 private fun TopBar(title: String, onBack: (() -> Unit)? = null, status: String? = null, actions: List<BarAction> = emptyList()) {
     Column {
+        // The actions sit flush right: their 40 dp hit target already holds the icon 10 dp off the edge.
         Row(
             Modifier
                 .windowInsetsPadding(WindowInsets.statusBars)
                 .fillMaxWidth()
                 .height(Size.bar)
-                .padding(start = if (onBack == null) Space.l else Space.xs, end = Space.xs),
+                .padding(start = if (onBack == null) Space.l else Space.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (onBack != null) BarButton(Icons.AutoMirrored.Outlined.ArrowBack, "Back", onBack)
@@ -437,6 +439,7 @@ private fun ChatScreen(
     onRunCommand: (String, String) -> Unit,
     onReplyPermission: (String, String) -> Unit,
     onOpenPickers: () -> Unit,
+    onLoadCommands: () -> Unit,
 ) {
     val list = rememberLazyListState()
     var input by rememberSaveable { mutableStateOf("") }
@@ -445,6 +448,10 @@ private fun ChatScreen(
         val count = list.layoutInfo.totalItemsCount
         if (count > 0) list.animateScrollToItem(count - 1)
     }
+
+    // Commands are per directory and the server registers plugins late, so ask again when the dock
+    // reaches for the list rather than trusting what was fetched at startup.
+    LaunchedEffect(input.startsWith("/")) { if (input.startsWith("/")) onLoadCommands() }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopBar(
@@ -937,7 +944,7 @@ private fun PickerScreen(
             singleLine = true,
             placeholder = {
                 Text(
-                    "Search 133 models",
+                    if (state.models.isEmpty()) "Search models" else "Search ${state.models.size} models",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

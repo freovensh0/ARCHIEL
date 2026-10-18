@@ -21,6 +21,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 private val JSON_TYPE = "application/json".toMediaType()
@@ -32,6 +33,7 @@ data class Session(
     val time: SessionTime? = null,
     val agent: String? = null,
     val model: ModelRef? = null,
+    val location: SessionLocation? = null,
 )
 
 @Serializable
@@ -41,6 +43,9 @@ fun ModelRef.label(): String = "$providerID/$id" + (variant?.let { "#$it" } ?: "
 
 @Serializable
 data class SessionTime(val updated: Long = 0)
+
+@Serializable
+data class SessionLocation(val directory: String? = null)
 
 @Serializable
 data class Message(
@@ -76,17 +81,14 @@ data class PartText(val type: String? = null, val text: String? = null)
 @Serializable
 data class AgentInfo(val id: String, val name: String, val mode: String? = null, val description: String? = null)
 
+// `cost` and `variants` arrive as arrays and `limit` as an object; nothing reads them yet, so they
+// stay out of the model rather than making the whole list undecodable.
 @Serializable
 data class ModelInfo(
     val providerID: String,
     val modelID: String,
     val name: String? = null,
-    val attachment: Boolean? = null,
-    val cost: CostInfo? = null,
 )
-
-@Serializable
-data class CostInfo(val input: Double? = null, val output: Double? = null)
 
 @Serializable
 data class CommandInfo(val name: String, val description: String? = null)
@@ -166,8 +168,14 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
     suspend fun models(): List<ModelInfo> =
         json.decodeFromString(Data.serializer(ModelInfo.serializer()), call("GET", "/api/model")).data
 
-    suspend fun commands(): List<CommandInfo> =
-        json.decodeFromString(Data.serializer(CommandInfo.serializer()), call("GET", "/api/command")).data
+    /**
+     * Commands are scoped to a directory and the server registers plugins after it starts listening,
+     * so the caller fetches them with the session's directory every time it needs them.
+     */
+    suspend fun commands(directory: String? = null): List<CommandInfo> {
+        val query = directory?.let { "?location[directory]=" + URLEncoder.encode(it, "UTF-8") }.orEmpty()
+        return json.decodeFromString(Data.serializer(CommandInfo.serializer()), call("GET", "/api/command$query")).data
+    }
 
     suspend fun permissions(sessionID: String): List<PermissionRequest> =
         json.decodeFromString(Data.serializer(PermissionRequest.serializer()), call("GET", "/api/session/$sessionID/permission")).data
