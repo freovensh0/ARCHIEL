@@ -27,6 +27,7 @@ data class ChatState(
     val location: String? = null,
     val messages: List<Message> = emptyList(),
     val stream: String = "",
+    val thinking: String = "",
     val busy: Boolean = false,
     val cutShort: Boolean = false,
     val loading: Boolean = false,
@@ -87,12 +88,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         when {
             type == "session.text.delta" ->
                 _state.update { it.copy(busy = true, stream = it.stream + data.str("delta").orEmpty()) }
+            // The thinking phase often runs alone for a while; a bounded tail keeps it cheap.
+            type == "session.reasoning.delta" ->
+                _state.update { it.copy(busy = true, thinking = (it.thinking + data.str("delta").orEmpty()).takeLast(2000)) }
             type == "session.execution.started" -> {
                 _state.update { it.copy(busy = true, cutShort = false) }
                 pollPermissions()
             }
             type == "session.execution.succeeded" -> {
-                _state.update { it.copy(busy = false, stream = "") }
+                _state.update { it.copy(busy = false, stream = "", thinking = "") }
                 loadMessages()
             }
             "error" in type ->
@@ -100,6 +104,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     it.copy(
                         busy = false,
                         cutShort = true,
+                        thinking = "",
                         error = "The server reported an error: ${data.toString().take(160)}",
                     )
                 }
@@ -146,7 +151,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun runCommand(name: String, arguments: String) {
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
-            _state.update { it.copy(busy = true, cutShort = false, error = null) }
+            _state.update { it.copy(busy = true, cutShort = false, thinking = "", error = null) }
             runCatching { client.runCommand(id, name, arguments) }
                 .onSuccess { pollPermissions() }
                 .onFailure { e -> _state.update { it.copy(busy = false, error = "Could not run /$name: ${e.message}") } }
@@ -191,6 +196,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 title = it.sessions.firstOrNull { s -> s.id == id }?.title,
                 messages = emptyList(),
                 stream = "",
+                thinking = "",
                 cutShort = false,
                 error = null,
             )
@@ -200,7 +206,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun close() {
         _state.update {
-            it.copy(sessionId = null, messages = emptyList(), stream = "", busy = false, cutShort = false, permissions = emptyList())
+            it.copy(sessionId = null, messages = emptyList(), stream = "", thinking = "", busy = false, cutShort = false, permissions = emptyList())
         }
     }
 
@@ -224,6 +230,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     messages = it.messages + Message(id = "local-${System.nanoTime()}", type = "user", text = body),
                     busy = true,
                     cutShort = false,
+                    thinking = "",
                     error = null,
                 )
             }

@@ -446,7 +446,7 @@ private fun ChatScreen(
     val list = rememberLazyListState()
     var input by rememberSaveable { mutableStateOf("") }
 
-    LaunchedEffect(state.messages.size, state.stream.length) {
+    LaunchedEffect(state.messages.size, state.stream.length, state.thinking.length) {
         val count = list.layoutInfo.totalItemsCount
         if (count > 0) list.animateScrollToItem(count - 1)
     }
@@ -478,8 +478,8 @@ private fun ChatScreen(
                 }
             }
             items(state.messages, key = { it.id }) { message -> Turn(message) }
-            if (state.stream.isNotEmpty()) {
-                item("stream") { AssistantTurn(state.stream, streaming = true) }
+            if (state.busy) {
+                item("live") { LiveTurn(state.thinking, state.stream) }
             }
         }
         state.permissions.firstOrNull()?.let { request ->
@@ -634,6 +634,30 @@ private fun AssistantTurn(text: String, streaming: Boolean = false) {
                 }
             }
         }
+    }
+}
+
+/** The live turn while a run streams: the reasoning tail first, then the answer as it arrives. */
+@Composable
+private fun LiveTurn(thinking: String, text: String) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = Space.l)) {
+        if (thinking.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                LiveDot()
+                Spacer(Modifier.width(Space.s))
+                Text("thinking", style = MaterialTheme.typography.labelSmall)
+            }
+            Spacer(Modifier.height(Space.xs))
+            SelectionContainer {
+                Text(
+                    thinking.takeLast(600),
+                    style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(Space.m))
+        }
+        if (text.isNotEmpty()) AssistantTurn(text, streaming = true)
     }
 }
 
