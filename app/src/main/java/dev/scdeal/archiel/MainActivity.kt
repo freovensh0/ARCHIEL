@@ -787,7 +787,7 @@ internal fun parseBlocks(source: String): List<Block> {
             when {
                 heading != null -> blocks += Block.Heading(heading.groupValues[1].length, heading.groupValues[2])
                 bullet != null -> blocks += Block.Bullet(bullet.groupValues[1], "• ")
-                else -> blocks += Block.Bullet(ordered.groupValues[2], ordered.groupValues[1] + ". ")
+                ordered != null -> blocks += Block.Bullet(ordered.groupValues[2], ordered.groupValues[1] + ". ")
             }
             i++
             continue
