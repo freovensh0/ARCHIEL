@@ -15,6 +15,12 @@ import kotlin.math.min
 
 data class ChatState(
     val sessions: List<Session> = emptyList(),
+    val commands: List<CommandInfo> = emptyList(),
+    val agents: List<AgentInfo> = emptyList(),
+    val models: List<ModelInfo> = emptyList(),
+    val permissions: List<PermissionRequest> = emptyList(),
+    val model: String? = null,
+    val agent: String? = null,
     val previews: Map<String, String> = emptyMap(),
     val sessionId: String? = null,
     val title: String? = null,
@@ -55,6 +61,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 .collect { handleEvent(it) }
         }
         refresh()
+        viewModelScope.launch {
+            runCatching { client.commands() }
+                .onSuccess { list -> _state.update { it.copy(commands = list) } }
+        }
+    }
+
+    /** Both pickers are fetched the first time they are opened, not on every start. */
+    fun loadPickers() {
+        if (_state.value.agents.isNotEmpty()) return
+        viewModelScope.launch {
+            runCatching { client.agents() to client.models() }
+                .onSuccess { (agents, models) -> _state.update { it.copy(agents = agents, models = models) } }
+                .onFailure { e -> _state.update { it.copy(error = "Could not load agents and models: ${e.message}") } }
+        }
     }
 
     private fun handleEvent(e: JsonObject) {
@@ -66,6 +86,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { it.copy(busy = true, stream = it.stream + data.str("delta").orEmpty()) }
             type == "session.execution.started" ->
                 _state.update { it.copy(busy = true, cutShort = false) }
+                pollPermissions()
             type == "session.execution.succeeded" -> {
                 _state.update { it.copy(busy = false, stream = "") }
                 loadMessages()
@@ -78,6 +99,53 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         error = "The server reported an error: ${data.toString().take(160)}",
                     )
                 }
+        }
+    }
+
+    /** The event feed does not name permission updates, so a run in flight polls them. */
+    private fun pollPermissions() {
+        val id = _state.value.sessionId ?: return
+        viewModelScope.launch {
+            runCatching { client.permissions(id) }
+                .onSuccess { list -> _state.update { it.copy(permissions = list) } }
+        }
+    }
+
+    fun replyPermission(requestID: String, decision: String) {
+        val id = _state.value.sessionId ?: return
+        viewModelScope.launch {
+            runCatching { client.replyPermission(id, requestID, decision) }
+                .onSuccess { _state.update { it.copy(permissions = it.permissions.filterNot { p -> p.id == requestID }) } }
+                .onFailure { e -> _state.update { it.copy(error = "Could not answer the permission request: ${e.message}") } }
+            pollPermissions()
+        }
+    }
+
+    fun setModel(providerID: String, modelID: String) {
+        val id = _state.value.sessionId ?: return
+        viewModelScope.launch {
+            runCatching { client.setModel(id, providerID, modelID) }
+                .onSuccess { _state.update { it.copy(model = "$providerID/$modelID") } }
+                .onFailure { e -> _state.update { it.copy(error = "Could not switch the model: ${e.message}") } }
+        }
+    }
+
+    fun setAgent(agent: String) {
+        val id = _state.value.sessionId ?: return
+        viewModelScope.launch {
+            runCatching { client.setAgent(id, agent) }
+                .onSuccess { _state.update { it.copy(agent = agent) } }
+                .onFailure { e -> _state.update { it.copy(error = "Could not switch the agent: ${e.message}") } }
+        }
+    }
+
+    fun runCommand(name: String, arguments: String) {
+        val id = _state.value.sessionId ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(busy = true, cutShort = false, error = null) }
+            runCatching { client.runCommand(id, name, arguments) }
+                .onSuccess { pollPermissions() }
+                .onFailure { e -> _state.update { it.copy(busy = false, error = "Could not run /$name: ${e.message}") } }
         }
     }
 
@@ -107,9 +175,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun open(id: String) {
+        val existing = _state.value.sessions.firstOrNull { s -> s.id == id }
         _state.update {
             it.copy(
                 sessionId = id,
+                model = existing?.model?.label(),
+                agent = existing?.agent,
+                permissions = emptyList(),
                 title = it.sessions.firstOrNull { s -> s.id == id }?.title,
                 messages = emptyList(),
                 stream = "",
@@ -121,7 +193,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun close() {
-        _state.update { it.copy(sessionId = null, messages = emptyList(), stream = "", busy = false, cutShort = false) }
+        _state.update {
+            it.copy(sessionId = null, messages = emptyList(), stream = "", busy = false, cutShort = false, permissions = emptyList())
+        }
     }
 
     fun newSession(onCreated: (String) -> Unit) = viewModelScope.launch {

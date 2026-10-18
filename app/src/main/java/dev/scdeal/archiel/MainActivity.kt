@@ -48,6 +48,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -67,6 +68,11 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -89,7 +95,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { Sessions, Chat, Connection }
+private enum class Screen { Sessions, Chat, Connection, Pickers }
 
 private typealias BarAction = Triple<ImageVector, String, () -> Unit>
 
@@ -119,6 +125,22 @@ private fun App() {
             onBack = { vm.close(); screen = Screen.Sessions },
             onSend = vm::send,
             onStop = vm::stop,
+            onRunCommand = vm::runCommand,
+            onReplyPermission = vm::replyPermission,
+            onOpenPickers = { vm.loadPickers(); screen = Screen.Pickers },
+        )
+
+        Screen.Pickers -> PickerScreen(
+            state = state,
+            onBack = { screen = Screen.Chat },
+            onPickModel = { provider, model ->
+                vm.setModel(provider, model)
+                screen = Screen.Chat
+            },
+            onPickAgent = { agent ->
+                vm.setAgent(agent)
+                screen = Screen.Chat
+            },
         )
 
         Screen.Connection -> ConnectionScreen(
@@ -406,7 +428,15 @@ private fun Centered(title: String, body: String, foot: String? = null) {
 // ------------------------------------------------------------------ chat
 
 @Composable
-private fun ChatScreen(state: ChatState, onBack: () -> Unit, onSend: (String) -> Unit, onStop: () -> Unit) {
+private fun ChatScreen(
+    state: ChatState,
+    onBack: () -> Unit,
+    onSend: (String) -> Unit,
+    onStop: () -> Unit,
+    onRunCommand: (String, String) -> Unit,
+    onReplyPermission: (String, String) -> Unit,
+    onOpenPickers: () -> Unit,
+) {
     val list = rememberLazyListState()
     var input by rememberSaveable { mutableStateOf("") }
 
@@ -420,6 +450,9 @@ private fun ChatScreen(state: ChatState, onBack: () -> Unit, onSend: (String) ->
             title = state.title?.takeIf { it.isNotBlank() } ?: "Chat",
             onBack = onBack,
             status = if (state.busy) "working" else null,
+            actions = listOf(
+                BarAction(Icons.Outlined.Tune, "Switch model or agent", onOpenPickers),
+            ),
         )
         if (state.cutShort) {
             Banner("The stream ended before the answer finished. The text below is all the server sent.")
@@ -439,12 +472,89 @@ private fun ChatScreen(state: ChatState, onBack: () -> Unit, onSend: (String) ->
                 item("stream") { AssistantTurn(state.stream, streaming = true) }
             }
         }
+        state.permissions.firstOrNull()?.let { request ->
+            PermissionCard(request, onReply = { decision -> onReplyPermission(request.id, decision) })
+        }
         Dock(
             input = input,
             onInput = { input = it },
             busy = state.busy,
-            onSend = { onSend(input); input = "" },
+            commands = state.commands,
+            model = state.model,
+            onSend = {
+                val text = input.trim()
+                if (text.startsWith("/")) {
+                    val name = text.removePrefix("/").substringBefore(' ')
+                    onRunCommand(name, text.removePrefix("/$name").trim())
+                } else {
+                    onSend(input)
+                }
+                input = ""
+            },
             onStop = onStop,
+        )
+    }
+}
+
+@Composable
+private fun PermissionCard(request: PermissionRequest, onReply: (String) -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(Space.m)
+            .clip(RoundedCornerShape(Radius.control))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(Size.hairline, AccentFill, RoundedCornerShape(Radius.control))
+            .padding(Space.m),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            LiveDot(MaterialTheme.colorScheme.error)
+            Spacer(Modifier.width(Space.s))
+            Text("Permission needed", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+        }
+        Spacer(Modifier.height(Space.s))
+        Text(
+            request.message ?: "The agent wants to run ${request.action}.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        request.resources.take(2).forEach { resource ->
+            Spacer(Modifier.height(Space.xs))
+            SelectionContainer {
+                Text(
+                    resource,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(Modifier.height(Space.m))
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+            Choice("Allow once", "once", true, onReply)
+            Choice("Always", "always", false, onReply)
+            Choice("Reject", "reject", false, onReply)
+        }
+    }
+}
+
+@Composable
+private fun Choice(label: String, decision: String, primary: Boolean, onReply: (String) -> Unit) {
+    Box(
+        Modifier
+            .heightIn(min = Size.hitSmall)
+            .clip(RoundedCornerShape(Radius.control))
+            .background(if (primary) AccentFill else MaterialTheme.colorScheme.background)
+            .border(Size.hairline, if (primary) AccentFill else MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.control))
+            .clickable { onReply(decision) }
+            .padding(horizontal = Space.m, vertical = Space.s),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (primary) OnAccent else MaterialTheme.colorScheme.onSurface,
         )
     }
 }
@@ -497,18 +607,115 @@ private fun Turn(message: Message) {
 
 @Composable
 private fun AssistantTurn(text: String, streaming: Boolean = false) {
-    SelectionContainer {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                text,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            if (streaming) {
-                Spacer(Modifier.width(2.dp))
-                Caret()
+    val blocks = remember(text) { parseBlocks(text) }
+    Column {
+        blocks.forEachIndexed { index, block ->
+            when (block) {
+                is Block.Code -> CodeBlock(block)
+                is Block.Paragraph -> {
+                    val caret = streaming && index == blocks.lastIndex
+                    SelectionContainer {
+                        Text(
+                            inline(block.text, caret),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
             }
+        }
+    }
+}
+
+private sealed interface Block {
+    data class Paragraph(val text: String) : Block
+    data class Code(val lines: List<String>, val language: String?) : Block
+}
+
+/** Fenced code blocks and blank line paragraphs; everything else stays in one paragraph. */
+internal fun parseBlocks(source: String): List<Block> {
+    val lines = source.lines()
+    val blocks = mutableListOf<Block>()
+    val buffer = mutableListOf<String>()
+    var i = 0
+    while (i < lines.size) {
+        val line = lines[i]
+        if (line.trimStart().startsWith("```")) {
+            if (buffer.isNotEmpty()) {
+                blocks += Block.Paragraph(buffer.joinToString("\n").trimEnd())
+                buffer.clear()
+            }
+            val language = line.trimStart().removePrefix("```").trim().ifBlank { null }
+            val code = mutableListOf<String>()
+            i++
+            while (i < lines.size && !lines[i].trimStart().startsWith("```")) {
+                code += lines[i]
+                i++
+            }
+            i++
+            blocks += Block.Code(code, language)
+            continue
+        }
+        if (line.isBlank() && buffer.isNotEmpty()) {
+            blocks += Block.Paragraph(buffer.joinToString("\n"))
+            buffer.clear()
+            i++
+            continue
+        }
+        buffer += line
+        i++
+    }
+    if (buffer.any { it.isNotBlank() }) blocks += Block.Paragraph(buffer.joinToString("\n").trimEnd())
+    return blocks
+}
+
+/** Inline code, bold and italics; a caret rides at the end while the answer streams. */
+private fun inline(text: String, caret: Boolean) = buildAnnotatedString {
+    var i = 0
+    while (i < text.length) {
+        when {
+            text[i] == '`' && text.indexOf('`', i + 1) > i ->
+                withStyle(SpanStyle(fontFamily = Mono, color = Color(0xFFA8A8AD))) {
+                    append(text.substring(i + 1, text.indexOf('`', i + 1)))
+                }.also { i = text.indexOf('`', i + 1) + 1 }
+            text.startsWith("**", i) && text.indexOf("**", i + 2) > i ->
+                withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
+                    append(text.substring(i + 2, text.indexOf("**", i + 2)))
+                }.also { i = text.indexOf("**", i + 2) + 2 }
+            text[i] == '*' && text.indexOf('*', i + 1) > i ->
+                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                    append(text.substring(i + 1, text.indexOf('*', i + 1)))
+                }.also { i = text.indexOf('*', i + 1) + 1 }
+            else -> {
+                append(text[i])
+                i++
+            }
+        }
+    }
+    if (caret) withStyle(SpanStyle(color = AccentFill)) { append("\u258C") }
+}
+
+@Composable
+private fun CodeBlock(block: Block.Code) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = Space.s)
+            .clip(RoundedCornerShape(Radius.chip))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(Size.hairline, MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.chip))
+            .padding(Space.m),
+    ) {
+        if (block.language != null) {
+            Text(block.language, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            Spacer(Modifier.height(Space.xs))
+        }
+        SelectionContainer {
+            Text(
+                block.lines.joinToString("\n"),
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                color = MaterialTheme.colorScheme.onSurface,
+            )
         }
     }
 }
@@ -584,8 +791,22 @@ private fun ToolBlock(part: Part) {
 }
 
 @Composable
-private fun Dock(input: String, onInput: (String) -> Unit, busy: Boolean, onSend: () -> Unit, onStop: () -> Unit) {
+private fun Dock(
+    input: String,
+    onInput: (String) -> Unit,
+    busy: Boolean,
+    commands: List<CommandInfo>,
+    model: String?,
+    onSend: () -> Unit,
+    onStop: () -> Unit,
+) {
     val active = busy || input.isNotBlank()
+    val matching = if (input.startsWith("/")) {
+        val query = input.removePrefix("/").substringBefore(' ').lowercase()
+        commands.filter { it.name.lowercase().startsWith(query) }.take(6)
+    } else {
+        emptyList()
+    }
     Column(
         Modifier
             .fillMaxWidth()
@@ -594,6 +815,34 @@ private fun Dock(input: String, onInput: (String) -> Unit, busy: Boolean, onSend
             .navigationBarsPadding(),
     ) {
         Hairline()
+        if (matching.isNotEmpty()) {
+            Column(Modifier.padding(horizontal = Space.s, vertical = Space.xs)) {
+                matching.forEach { command ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(Radius.chip))
+                            .clickable { onInput("/${command.name} ") }
+                            .padding(horizontal = Space.m, vertical = Space.s),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "/${command.name}",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                            color = AccentFill,
+                        )
+                        Spacer(Modifier.width(Space.m))
+                        Text(
+                            command.description.orEmpty(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
         Row(Modifier.padding(Space.s), verticalAlignment = Alignment.Bottom) {
             TextField(
                 value = input,
@@ -648,9 +897,138 @@ private fun Dock(input: String, onInput: (String) -> Unit, busy: Boolean, onSend
         ) {
             Text("enter to send", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
             Spacer(Modifier.weight(1f))
-            Text("opencode", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+            Text(
+                model ?: "opencode",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.height(Space.s))
+    }
+}
+
+
+// ------------------------------------------------------------------ pickers
+
+@Composable
+private fun PickerScreen(
+    state: ChatState,
+    onBack: () -> Unit,
+    onPickModel: (String, String) -> Unit,
+    onPickAgent: (String) -> Unit,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val models = remember(state.models, query) {
+        val q = query.trim().lowercase()
+        state.models
+            .filter { q.isEmpty() || it.modelID.lowercase().contains(q) || it.providerID.lowercase().contains(q) }
+            .sortedBy { it.providerID }
+            .take(80)
+    }
+
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        TopBar(title = "Model and agent", onBack = onBack)
+        TextField(
+            value = query,
+            onValueChange = { query = it },
+            singleLine = true,
+            placeholder = {
+                Text(
+                    "Search 133 models",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+            shape = RoundedCornerShape(Radius.chip),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                focusedIndicatorColor = Transparent,
+                unfocusedIndicatorColor = Transparent,
+                disabledIndicatorColor = Transparent,
+                cursorColor = AccentFill,
+            ),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.m),
+        )
+        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+            if (query.isEmpty()) {
+                item("agents") {
+                    Text(
+                        "AGENT",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(horizontal = Space.l, vertical = Space.s),
+                    )
+                }
+                items(state.agents, key = { "agent-${it.id}" }) { agent ->
+                    PickerRow(
+                        title = agent.name,
+                        detail = agent.mode ?: "primary",
+                        selected = state.agent == agent.id,
+                        mono = false,
+                        onClick = { onPickAgent(agent.id) },
+                    )
+                }
+                item("models") {
+                    Text(
+                        "MODEL",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(horizontal = Space.l, vertical = Space.s),
+                    )
+                }
+            }
+            items(models, key = { "${it.providerID}/${it.modelID}" }) { model ->
+                PickerRow(
+                    title = model.modelID,
+                    detail = model.providerID,
+                    selected = state.model == "${model.providerID}/${model.modelID}",
+                    mono = true,
+                    onClick = { onPickModel(model.providerID, model.modelID) },
+                )
+            }
+            if (models.isEmpty()) {
+                item("none") { Centered("No match", "Nothing on this server matches that search.") }
+            }
         }
     }
+}
+
+@Composable
+private fun PickerRow(title: String, detail: String, selected: Boolean, mono: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .heightIn(min = Size.row)
+            .padding(horizontal = Space.l, vertical = Space.m),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = if (mono) MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono) else MaterialTheme.typography.titleMedium,
+                color = if (selected) AccentFill else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (selected) {
+            Spacer(Modifier.width(Space.m))
+            LiveDot(AccentFill)
+        }
+    }
+    Hairline()
 }
 
 // ------------------------------------------------------------------ connection

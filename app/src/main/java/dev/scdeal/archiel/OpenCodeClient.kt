@@ -26,7 +26,18 @@ import java.util.concurrent.TimeUnit
 private val JSON_TYPE = "application/json".toMediaType()
 
 @Serializable
-data class Session(val id: String, val title: String? = null, val time: SessionTime? = null)
+data class Session(
+    val id: String,
+    val title: String? = null,
+    val time: SessionTime? = null,
+    val agent: String? = null,
+    val model: ModelRef? = null,
+)
+
+@Serializable
+data class ModelRef(val id: String, val providerID: String, val variant: String? = null)
+
+fun ModelRef.label(): String = "$providerID/$id" + (variant?.let { "#$it" } ?: "")
 
 @Serializable
 data class SessionTime(val updated: Long = 0)
@@ -61,6 +72,34 @@ data class PartState(
 
 @Serializable
 data class PartText(val type: String? = null, val text: String? = null)
+
+@Serializable
+data class AgentInfo(val id: String, val name: String, val mode: String? = null, val description: String? = null)
+
+@Serializable
+data class ModelInfo(
+    val providerID: String,
+    val modelID: String,
+    val name: String? = null,
+    val attachment: Boolean? = null,
+    val cost: CostInfo? = null,
+)
+
+@Serializable
+data class CostInfo(val input: Double? = null, val output: Double? = null)
+
+@Serializable
+data class CommandInfo(val name: String, val description: String? = null)
+
+@Serializable
+data class PermissionRequest(
+    val id: String,
+    val sessionID: String? = null,
+    val action: String,
+    val resources: List<String> = emptyList(),
+    val save: List<String> = emptyList(),
+    val message: String? = null,
+)
 
 @Serializable
 data class ServerInfo(val version: String? = null, val pid: Int? = null, val urls: List<String> = emptyList())
@@ -120,6 +159,48 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
         }
 
     suspend fun info(): ServerInfo = json.decodeFromString(ServerInfo.serializer(), call("GET", "/api/info"))
+
+    suspend fun agents(): List<AgentInfo> =
+        json.decodeFromString(Data.serializer(AgentInfo.serializer()), call("GET", "/api/agent")).data
+
+    suspend fun models(): List<ModelInfo> =
+        json.decodeFromString(Data.serializer(ModelInfo.serializer()), call("GET", "/api/model")).data
+
+    suspend fun commands(): List<CommandInfo> =
+        json.decodeFromString(Data.serializer(CommandInfo.serializer()), call("GET", "/api/command")).data
+
+    suspend fun permissions(sessionID: String): List<PermissionRequest> =
+        json.decodeFromString(Data.serializer(PermissionRequest.serializer()), call("GET", "/api/session/$sessionID/permission")).data
+
+    suspend fun replyPermission(sessionID: String, requestID: String, decision: String) {
+        call(
+            "POST",
+            "/api/session/$sessionID/permission/$requestID/reply",
+            buildJsonObject { put("decision", decision) }.toString(),
+        )
+    }
+
+    suspend fun setModel(sessionID: String, providerID: String, modelID: String) {
+        val body = buildJsonObject {
+            put("model", buildJsonObject {
+                put("providerID", providerID)
+                put("id", modelID)
+            })
+        }
+        call("POST", "/api/session/$sessionID/model", body.toString())
+    }
+
+    suspend fun setAgent(sessionID: String, agent: String) {
+        call("POST", "/api/session/$sessionID/agent", buildJsonObject { put("agent", agent) }.toString())
+    }
+
+    suspend fun runCommand(sessionID: String, name: String, text: String) {
+        val body = buildJsonObject {
+            put("name", name)
+            put("text", text)
+        }
+        call("POST", "/api/session/$sessionID/command", body.toString())
+    }
 
     suspend fun sessions(): List<Session> =
         json.decodeFromString(Data.serializer(Session.serializer()), call("GET", "/api/session?limit=50")).data
