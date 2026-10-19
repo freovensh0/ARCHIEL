@@ -78,3 +78,5 @@ reaches a state worth publishing. When it does, push once with a clean history, 
 - Keep `Message`/`Part` models tolerant: the server adds fields, so `ignoreUnknownKeys` stays and new
   fields are nullable with defaults.
 - Errors read as sentences the user can act on: what failed, and what to change.
+- `Modifier.padding` takes either `horizontal`/`vertical` or `start`/`top`/`end`/`bottom`, never a
+  mix of the two. The compiler rejects the mix; it has broken the build twice.
