@@ -1,6 +1,7 @@
 package dev.scdeal.archiel
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -46,6 +47,8 @@ data class ChatState(    val sessions: List<Session> = emptyList(),
     val serverVersion: String? = null,
     /** The sessions-screen title filter; it is not part of opening a session, so `open()` leaves it alone. */
     val search: String = "",
+    /** The unsent input of the open session; persisted to disk so it survives process death. */
+    val draft: String = "",
     val error: String? = null,
 )
 
@@ -65,6 +68,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val cfg = Cfg.load(app)
     private val client = OpenCodeClient(cfg.baseUrl, cfg.password)
     val address = cfg.baseUrl
+
+    /** Drafts sit on disk, keyed by session id, so a killed process does not lose what you typed. */
+    private val drafts = app.getSharedPreferences("drafts", Context.MODE_PRIVATE)
 
     // Event payloads carry the same shapes as the API responses; decode them with the same tolerance.
     private val json = Json { ignoreUnknownKeys = true }
@@ -380,6 +386,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 thinking = "",
                 tools = emptyList(),
                 cutShort = false,
+                draft = drafts.getString(id, "").orEmpty(),
                 error = null,
             )
         }
@@ -390,7 +397,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun close() {
         _state.update {
-            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList())
+            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "")
         }
     }
 
@@ -409,15 +416,30 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { client.deleteSession(id) }
             .onSuccess {
                 _state.update { it.copy(sessions = it.sessions.filterNot { s -> s.id == id }) }
+                drafts.edit().remove(id).apply()
                 onDeleted()
             }
             .onFailure { e -> fail("Could not delete the session: ${e.message}") }
+    }
+
+    /** Persists every keystroke; the strings are tiny and `apply()` writes off the main thread. */
+    fun draft(text: String) {
+        val id = _state.value.sessionId ?: return
+        _state.update { it.copy(draft = text) }
+        drafts.edit().putString(id, text).apply()
+    }
+
+    /** The text became a message, so a later reload must not bring it back. */
+    private fun clearDraft(id: String) {
+        drafts.edit().remove(id).apply()
+        _state.update { it.copy(draft = "") }
     }
 
     fun send(text: String) {
         val body = text.trim()
         val id = _state.value.sessionId ?: return
         if (body.isEmpty()) return
+        clearDraft(id)
         val local = Message(id = "local-${System.nanoTime()}", type = "user", text = body)
         _state.update {
             it.copy(

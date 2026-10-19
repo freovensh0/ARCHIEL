@@ -148,6 +148,7 @@ private fun App() {
             onRetry = if (canRetry) ({ vm.retry() }) else null,
             onBack = { vm.close(); screen = Screen.Sessions },
             onSend = vm::send,
+            onDraft = vm::draft,
             onStop = vm::stop,
             onRunCommand = vm::runCommand,
             onReplyPermission = vm::replyPermission,
@@ -632,6 +633,7 @@ private fun ChatScreen(
     onRetry: (() -> Unit)?,
     onBack: () -> Unit,
     onSend: (String) -> Unit,
+    onDraft: (String) -> Unit,
     onStop: () -> Unit,
     onRunCommand: (String, String) -> Unit,
     onReplyPermission: (String, String) -> Unit,
@@ -643,7 +645,6 @@ private fun ChatScreen(
     onDelete: () -> Unit,
 ) {
     val list = rememberLazyListState()
-    var input by rememberSaveable { mutableStateOf("") }
     var renaming by remember { mutableStateOf(false) }
     var confirmingDelete by remember { mutableStateOf(false) }
 
@@ -654,7 +655,7 @@ private fun ChatScreen(
 
     // Commands are per directory and the server registers plugins late, so ask again when the dock
     // reaches for the list rather than trusting what was fetched at startup.
-    LaunchedEffect(input.startsWith("/")) { if (input.startsWith("/")) onLoadCommands() }
+    LaunchedEffect(state.draft.startsWith("/")) { if (state.draft.startsWith("/")) onLoadCommands() }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopBar(
@@ -707,20 +708,22 @@ private fun ChatScreen(
             }
         }
         Dock(
-            input = input,
-            onInput = { input = it },
+            input = state.draft,
+            onInput = onDraft,
             busy = state.busy,
             commands = state.commands,
             model = state.model,
             onSend = {
-                val text = input.trim()
+                val text = state.draft.trim()
                 if (text.startsWith("/")) {
                     val name = text.removePrefix("/").substringBefore(' ')
                     onRunCommand(name, text.removePrefix("/$name").trim())
+                    // The dock owns the field, so a typed command clears it; the menu reuses
+                    // runCommand without meaning to touch a draft the user is writing.
+                    onDraft("")
                 } else {
-                    onSend(input)
+                    onSend(state.draft)
                 }
-                input = ""
             },
             onStop = onStop,
         )
