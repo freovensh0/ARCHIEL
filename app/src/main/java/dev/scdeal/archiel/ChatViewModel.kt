@@ -29,6 +29,8 @@ data class ChatState(    val sessions: List<Session> = emptyList(),
     val title: String? = null,
     val location: String? = null,
     val messages: List<Message> = emptyList(),
+    /** The local echo no run has picked up yet; its bubble shows "queued" while this is set. */
+    val queuedId: String? = null,
     val stream: String = "",
     val thinking: String = "",
     val tools: List<Part> = emptyList(),
@@ -134,7 +136,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             type == "session.tool.failed" ->
                 upsertTool(data.str("id")) { it.copy(state = (it.state ?: PartState()).copy(status = "error", content = toolOutput(data))) }
             type == "session.execution.started" -> {
-                _state.update { it.copy(busy = true, cutShort = false, tools = emptyList()) }
+                // A run for the prompt has begun, so the server has it even before the reload.
+                _state.update { it.copy(busy = true, cutShort = false, tools = emptyList(), queuedId = null) }
                 pollPermissions()
             }
             type == "session.execution.succeeded" -> {
@@ -142,7 +145,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 loadMessages()
             }
             "error" in type -> {
-                _state.update { it.copy(busy = false, cutShort = true, thinking = "", tools = emptyList()) }
+                _state.update { it.copy(busy = false, cutShort = true, thinking = "", tools = emptyList(), queuedId = null) }
                 // Reload so the transcript shows what the server actually stored before it failed.
                 fail("The server reported an error: ${data.toString().take(160)}") { loadMessages() }
             }
@@ -288,6 +291,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 permissions = emptyList(),
                 title = it.sessions.firstOrNull { s -> s.id == id }?.title,
                 messages = emptyList(),
+                queuedId = null,
                 stream = "",
                 thinking = "",
                 tools = emptyList(),
@@ -300,7 +304,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun close() {
         _state.update {
-            it.copy(sessionId = null, messages = emptyList(), stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList())
+            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList())
         }
     }
 
@@ -318,9 +322,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val body = text.trim()
         val id = _state.value.sessionId ?: return
         if (body.isEmpty()) return
+        val local = Message(id = "local-${System.nanoTime()}", type = "user", text = body)
         _state.update {
             it.copy(
-                messages = it.messages + Message(id = "local-${System.nanoTime()}", type = "user", text = body),
+                messages = it.messages + local,
+                queuedId = local.id,
                 cutShort = false,
                 thinking = "",
                 tools = emptyList(),
@@ -334,7 +340,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(busy = true, error = null) }
         runCatching { client.send(id, body) }
             .onFailure { e ->
-                _state.update { it.copy(busy = false) }
+                // The prompt never reached the server, so the queued label would be a lie; the error card explains why.
+                _state.update { it.copy(busy = false, queuedId = null) }
                 fail("Could not send the message: ${e.message}") { dispatch(id, body) }
             }
     }

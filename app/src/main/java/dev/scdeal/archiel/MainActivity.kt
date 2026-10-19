@@ -481,7 +481,7 @@ private fun ChatScreen(
                     Centered("Start here", "Messages run in the opencode session on the server.")
                 }
             }
-            items(state.messages, key = { it.id }) { message -> Turn(message) }
+            items(state.messages, key = { it.id }) { message -> Turn(message, queued = message.id == state.queuedId) }
             if (state.busy) {
                 item("live") { LiveTurn(state.tools, state.thinking, state.stream) }
             }
@@ -598,23 +598,34 @@ private fun Choice(label: String, decision: String, primary: Boolean, onReply: (
 }
 
 @Composable
-private fun Turn(message: Message) {
+private fun Turn(message: Message, queued: Boolean = false) {
     if (message.type == "user") {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s),
             horizontalArrangement = Arrangement.End,
         ) {
             SelectionContainer {
-                Text(
-                    message.text.orEmpty(),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier
+                Column(
+                    Modifier
                         .fillMaxWidth(0.88f)
                         .clip(RoundedCornerShape(Radius.control))
                         .background(MaterialTheme.colorScheme.surface)
                         .padding(horizontal = Space.l, vertical = Space.m),
-                )
+                ) {
+                    Text(
+                        message.text.orEmpty(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (queued) {
+                        Spacer(Modifier.height(Space.xs))
+                        Text(
+                            "queued",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                }
             }
         }
         return
