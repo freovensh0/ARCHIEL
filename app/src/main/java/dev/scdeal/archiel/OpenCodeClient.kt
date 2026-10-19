@@ -34,6 +34,7 @@ data class Session(
     val agent: String? = null,
     val model: ModelRef? = null,
     val location: SessionLocation? = null,
+    val parentID: String? = null,
 )
 
 @Serializable

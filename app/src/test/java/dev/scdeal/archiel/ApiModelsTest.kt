@@ -38,6 +38,17 @@ class ApiModelsTest {
     }
 
     @Test
+    fun `a subagent session keeps its parent id and a root stays without one`() {
+        val child = json.decodeFromString(
+            Session.serializer(),
+            """{"id":"ses_child","parentID":"ses_parent","title":"Build the parser"}""",
+        )
+        assertEquals("ses_parent", child.parentID)
+        val root = json.decodeFromString(Session.serializer(), """{"id":"ses_parent"}""")
+        assertEquals(null, root.parentID)
+    }
+
+    @Test
     fun `a reasoning part keeps its text and the time it took`() {
         val row = """
             {"id":"prt_1","type":"reasoning",

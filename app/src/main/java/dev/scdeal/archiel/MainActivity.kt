@@ -257,6 +257,27 @@ private fun Banner(text: String) {
 
 // ------------------------------------------------------------------ sessions
 
+/** A display row: a root session keeps its tap and preview; a subagent is read-only under it. */
+private data class SessionRowItem(val session: Session, val child: Boolean)
+
+/** Server order, each root immediately followed by its subagents. An orphan stays where the server put it. */
+private fun sessionRows(sessions: List<Session>): List<SessionRowItem> {
+    val ids = sessions.mapTo(HashSet()) { it.id }
+    val children = sessions.filter { it.parentID != null }.groupBy { it.parentID }
+    val out = ArrayList<SessionRowItem>(sessions.size)
+    val placed = HashSet<String>()
+    fun add(session: Session, child: Boolean) {
+        if (!placed.add(session.id)) return
+        out += SessionRowItem(session, child)
+        children[session.id]?.forEach { add(it, true) }
+    }
+    for (session in sessions) {
+        if (session.parentID != null && session.parentID in ids) continue
+        add(session, session.parentID != null)
+    }
+    return out
+}
+
 @Composable
 private fun SessionsScreen(
     state: ChatState,
@@ -283,6 +304,8 @@ private fun SessionsScreen(
             },
             dot = if (state.online == true) AccentFill else MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        val rows = remember(state.sessions) { sessionRows(state.sessions) }
 
         when {
             state.sessions.isEmpty() && state.online == false -> OfflineState(address, onRefresh)
@@ -313,14 +336,22 @@ private fun SessionsScreen(
                     }
                     Hairline()
                 }
-                items(state.sessions, key = { it.id }) { session ->
-                    SessionRow(
-                        title = session.title?.takeIf { it.isNotBlank() } ?: "Untitled session",
-                        preview = state.previews[session.id],
-                        stamp = stamp(session.time?.updated),
-                        onClick = { onOpen(session.id) },
-                        onPreview = { onPreview(session.id) },
-                    )
+                items(rows, key = { if (it.child) "subagent:${it.session.id}" else it.session.id }) { row ->
+                    if (row.child) {
+                        ChildSessionRow(
+                            title = row.session.title?.takeIf { it.isNotBlank() } ?: "Subagent",
+                            agent = row.session.agent,
+                            stamp = stamp(row.session.time?.updated),
+                        )
+                    } else {
+                        SessionRow(
+                            title = row.session.title?.takeIf { it.isNotBlank() } ?: "Untitled session",
+                            preview = state.previews[row.session.id],
+                            stamp = stamp(row.session.time?.updated),
+                            onClick = { onOpen(row.session.id) },
+                            onPreview = { onPreview(row.session.id) },
+                        )
+                    }
                 }
             }
         }
@@ -348,6 +379,38 @@ private fun SessionRow(title: String, preview: String?, stamp: String, onClick: 
             )
             Text(
                 preview.orEmpty(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(Space.m))
+        Text(stamp, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 3.dp))
+    }
+    Hairline()
+}
+
+/** Subagents have no screen of their own: no tap, no preview. The indent and the word carry that, not a colour. */
+@Composable
+private fun ChildSessionRow(title: String, agent: String?, stamp: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = Size.row)
+            .padding(start = Space.xl, end = Space.l, vertical = Space.m),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                listOfNotNull("subagent", agent?.takeIf { it.isNotBlank() }).joinToString(" · "),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
