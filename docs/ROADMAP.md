@@ -37,25 +37,29 @@ runtime).
   context bar against the model's window, model variants, favourites and
   hidden models, the agent list grouped by mode, and a default model and agent
   for new sessions kept on the device
+- Attachments: an image or a file picked on the phone travels as a data URL
+  the server decodes inline, shows up in the transcript as a thumbnail (open
+  full screen, pinch to zoom) or a file card
+- Delegation: an `@agent` mention in the dock names a subagent, and the prompt
+  carries it so the agent can hand the work over
+- The server's own tools: a shell runner that executes one command and pages
+  its output, and a terminal that runs a program over the PTY socket with a
+  line input
 
 ## Phase 5 — attachments and files
 
-- Image attachments with the Android photo picker and a pinch-zoom viewer.
 - `@file` mention autocomplete backed by the server's path search.
 - Share-in intent: send supported files from other apps into a new session.
-- The file has to reach the server as a URI it can read; the copy path depends
-  on where the server runs.
 
 ## Phase 6 — agents and delegation
 
-- `@agent` mentions in the dock: pick a subagent, the prompt carries it.
 - Subagent list with mode and description in the picker.
 - Session view of a subagent's own transcript (read-only, under the parent).
 
 ## Phase 7 — shells and terminals
 
-- Terminal over the server's PTY endpoints (WebSocket), a tab next to chat.
-- The server's persistent shells (`/api/shell`) as a quick command runner.
+- The terminal is a program over the server's PTY socket, with a line input and
+  no ANSI rendering; the shell runner executes one command and pages its output.
 
 ## Phase 8 — device integration
 
