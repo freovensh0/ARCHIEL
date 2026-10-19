@@ -1355,7 +1355,8 @@ private val ThumbMaxHeight = 200.dp
 
 /** Key is (max side, base64), so a thumbnail and the viewer's copy coexist without re-decoding. */
 private val attachmentCache = object : LruCache<Pair<Int, String>, ImageBitmap>(24 * 1024 * 1024) {
-    override fun sizeOf(key: Pair<Int, String>, value: ImageBitmap): Int = value.byteCount
+    // Four bytes per pixel is the usual ARGB_8888 size; close enough for a cache budget.
+    override fun sizeOf(key: Pair<Int, String>, value: ImageBitmap): Int = value.width * value.height * 4
 }
 
 /**
