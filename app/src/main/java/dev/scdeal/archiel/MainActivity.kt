@@ -3,11 +3,15 @@ package dev.scdeal.archiel
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -18,6 +22,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +56,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.Close
@@ -169,6 +175,8 @@ private fun App() {
             onBack = { vm.close(); screen = Screen.Sessions },
             onSend = vm::send,
             onDraft = vm::draft,
+            onAttach = vm::attach,
+            onDetach = vm::detach,
             onStop = vm::stop,
             onRunCommand = vm::runCommand,
             onReplyPermission = vm::replyPermission,
@@ -673,6 +681,8 @@ private fun ChatScreen(
     onBack: () -> Unit,
     onSend: (String) -> Unit,
     onDraft: (String) -> Unit,
+    onAttach: (Uri) -> Unit,
+    onDetach: (String) -> Unit,
     onStop: () -> Unit,
     onRunCommand: (String, String) -> Unit,
     onReplyPermission: (String, String) -> Unit,
@@ -775,6 +785,9 @@ private fun ChatScreen(
             busy = state.busy,
             commands = state.commands,
             model = state.model,
+            attachments = state.attachments,
+            onAttach = onAttach,
+            onDetach = onDetach,
             onSend = {
                 val text = state.draft.trim()
                 if (text.startsWith("/")) {
@@ -1643,10 +1656,16 @@ private fun Dock(
     busy: Boolean,
     commands: List<CommandInfo>,
     model: String?,
+    attachments: List<Attachment>,
+    onAttach: (Uri) -> Unit,
+    onDetach: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
     val active = busy || input.isNotBlank()
+    // Both pickers hand a content Uri back; the view model reads it through the resolver.
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(onAttach) }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(onAttach) }
     val matching = if (input.startsWith("/")) {
         val query = input.removePrefix("/").substringBefore(' ').lowercase()
         commands.filter { it.name.lowercase().startsWith(query) }.take(6)
@@ -1689,7 +1708,25 @@ private fun Dock(
                 }
             }
         }
+        if (attachments.isNotEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = Space.s, vertical = Space.xs),
+                horizontalArrangement = Arrangement.spacedBy(Space.s),
+            ) {
+                attachments.forEach { attachment ->
+                    AttachmentChip(attachment) { onDetach(attachment.name) }
+                }
+            }
+        }
         Row(Modifier.padding(Space.s), verticalAlignment = Alignment.Bottom) {
+            AttachMenu(
+                onImage = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                onFile = { filePicker.launch(arrayOf("*/*")) },
+            )
+            Spacer(Modifier.width(Space.s))
             TextField(
                 value = input,
                 onValueChange = onInput,
@@ -1753,6 +1790,65 @@ private fun Dock(
         }
         Spacer(Modifier.height(Space.s))
     }
+}
+
+/** A pending attachment: its name and size, with the only action that matters before sending. */
+@Composable
+private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
+    Row(
+        Modifier
+            .heightIn(min = Size.hitSmall)
+            .clip(RoundedCornerShape(Radius.chip))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(Size.hairline, MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.chip))
+            .padding(start = Space.m, end = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "${attachment.name} · ${fileSize(attachment.bytes)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+        )
+        Box(
+            Modifier
+                .size(Size.hitSmall)
+                .clip(RoundedCornerShape(Radius.chip))
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Outlined.Close, "Remove the attachment", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+/** The paperclip sits left of the field; the menu picks between the photo picker and any document. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AttachMenu(onImage: () -> Unit, onFile: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        BarButton(Icons.Outlined.AttachFile, "Attach a file") { open = true }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            shape = RoundedCornerShape(Radius.control),
+            containerColor = MaterialTheme.colorScheme.surface,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            border = BorderStroke(Size.hairline, MaterialTheme.colorScheme.outline),
+        ) {
+            SessionMenuItem("Image") { open = false; onImage() }
+            SessionMenuItem("File") { open = false; onFile() }
+        }
+    }
+}
+
+/** A byte count as "240 kB" or "1.4 MB"; the server's 20 MB ceiling is the only size that matters here. */
+private fun fileSize(bytes: Int): String = when {
+    bytes >= 1_000_000 -> String.format(Locale.US, "%.1f", bytes / 1_000_000.0).removeSuffix(".0") + " MB"
+    bytes >= 1_000 -> "${bytes / 1_000} kB"
+    else -> "$bytes B"
 }
 
 

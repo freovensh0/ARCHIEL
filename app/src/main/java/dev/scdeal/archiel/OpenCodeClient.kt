@@ -14,6 +14,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
@@ -140,6 +141,10 @@ data class ModelLimit(val context: Long = 0, val output: Long = 0)
 
 @Serializable
 data class CommandInfo(val name: String, val description: String? = null)
+
+/** One file on a prompt: `uri` may be a data URL, which is the only path that works for a remote server. */
+@Serializable
+data class PromptFile(val uri: String, val name: String? = null)
 
 @Serializable
 data class PermissionRequest(
@@ -333,8 +338,13 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
             .data
             .firstOrNull()
 
-    suspend fun send(sessionID: String, text: String) {
-        call("POST", "/api/session/$sessionID/prompt", buildJsonObject { put("text", text) }.toString())
+    suspend fun send(sessionID: String, text: String, files: List<PromptFile> = emptyList()) {
+        val body = buildJsonObject {
+            put("text", text)
+            // A prompt with no files must not carry an empty array.
+            if (files.isNotEmpty()) put("files", json.encodeToJsonElement(files))
+        }
+        call("POST", "/api/session/$sessionID/prompt", body.toString())
     }
 
     suspend fun interrupt(sessionID: String) {

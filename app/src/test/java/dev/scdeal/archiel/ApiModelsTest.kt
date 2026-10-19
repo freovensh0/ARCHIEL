@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
@@ -222,6 +223,19 @@ class ApiModelsTest {
     fun `a non-todo input has no items`() {
         val input = json.decodeFromString(JsonObject.serializer(), """{"command":"ls"}""")
         assertEquals(null, todoItems(input))
+    }
+
+    @Test
+    fun `a prompt file carries its uri and an optional name`() {
+        val named = json.encodeToJsonElement(
+            PromptFile.serializer(),
+            PromptFile(uri = "data:image/png;base64,AAAA", name = "shot.png"),
+        ).jsonObject
+        assertEquals("data:image/png;base64,AAAA", (named["uri"] as? JsonPrimitive)?.contentOrNull)
+        assertEquals("shot.png", (named["name"] as? JsonPrimitive)?.contentOrNull)
+        // A missing name leaves the key out entirely, so the server never sees a null.
+        val nameless = json.encodeToJsonElement(PromptFile.serializer(), PromptFile(uri = "data:x;base64,AA")).jsonObject
+        assertEquals(null, nameless["name"])
     }
 
     @Test

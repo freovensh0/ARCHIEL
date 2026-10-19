@@ -2,6 +2,8 @@ package dev.scdeal.archiel
 
 import android.app.Application
 import android.net.Uri
+import android.provider.OpenableColumns
+import android.util.Base64
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -30,6 +32,9 @@ data class Usage(val tokens: TokenUsage, val cost: Double)
 
 /** The open session's context fill; the limit is null until the model that ran the last turn is known. */
 data class ContextUsage(val used: Long, val limit: Long?)
+
+/** A file picked for the next prompt. `data` is the canonical base64 payload, kept so Retry can resend it. */
+data class Attachment(val name: String, val mime: String, val bytes: Int, val data: String)
 
 data class ChatState(
     /** Starred and hidden model keys ("provider/model"), kept on disk so they outlive the process. */
@@ -66,6 +71,8 @@ data class ChatState(
     val search: String = "",
     /** The unsent input of the open session; persisted to disk so it survives process death. */
     val draft: String = "",
+    /** Files waiting to go out with the next prompt. */
+    val attachments: List<Attachment> = emptyList(),
     /** The exported session file to hand to the share sheet; cleared once the chooser is shown. */
     val shareUri: Uri? = null,
     val usage: Usage? = null,
@@ -74,6 +81,9 @@ data class ChatState(
 )
 
 private const val SEARCH_DEBOUNCE_MS = 250L
+
+/** The server refuses a data URL larger than 20 MB, so the app stops it before the encode. */
+private const val MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
 /** The session commands the TUI keeps out of /api/command and runs itself; we do the same here. */
 val builtins = listOf(
@@ -94,6 +104,9 @@ private fun sessionSlug(title: String?, fallback: String): String =
         .trim('-')
         .take(40)
         .ifEmpty { fallback }
+
+/** The pending attachment as the wire sends it: the base64 payload is a data URL the server decodes inline. */
+private fun Attachment.toPromptFile(): PromptFile = PromptFile(uri = "data:$mime;base64,$data", name = name)
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val cfg = Cfg.load(app)
@@ -493,6 +506,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 tools = emptyList(),
                 cutShort = false,
                 draft = drafts.getString(id, "").orEmpty(),
+                attachments = emptyList(),
                 usage = usageOf(existing),
                 context = null,
                 error = null,
@@ -507,7 +521,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun close() {
         _state.update {
-            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", shareUri = null, usage = null, context = null)
+            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", attachments = emptyList(), shareUri = null, usage = null, context = null)
         }
     }
 
@@ -569,11 +583,41 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(draft = "") }
     }
 
+    /**
+     * Reads a picked file off the main thread and parks it as a pending attachment. The content resolver
+     * is the only source that works for a remote server, since the server never sees the device's disk.
+     */
+    fun attach(uri: Uri) = viewModelScope.launch {
+        val resolver = getApplication<Application>().contentResolver
+        val attachment = runCatching {
+            withContext(Dispatchers.IO) {
+                val mime = resolver.getType(uri) ?: "application/octet-stream"
+                val name = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                    ?.takeIf { it.isNotBlank() }
+                    ?: uri.lastPathSegment
+                    ?: "file"
+                val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IOException("The file could not be read.")
+                if (bytes.size > MAX_ATTACHMENT_BYTES) throw IOException("The file is larger than 20 MB, which the server refuses.")
+                Attachment(name, mime, bytes.size, Base64.encodeToString(bytes, Base64.NO_WRAP))
+            }
+        }
+        attachment
+            .onSuccess { a -> _state.update { it.copy(attachments = it.attachments + a) } }
+            .onFailure { e -> fail(e.message ?: "The file could not be read.") }
+    }
+
+    fun detach(name: String) = _state.update { it.copy(attachments = it.attachments.filterNot { a -> a.name == name }) }
+
+    fun clearAttachments() = _state.update { it.copy(attachments = emptyList()) }
+
     fun send(text: String) {
         val body = text.trim()
         val id = _state.value.sessionId ?: return
         if (body.isEmpty()) return
         clearDraft(id)
+        val files = _state.value.attachments.map { it.toPromptFile() }
         val local = Message(id = "local-${System.nanoTime()}", type = "user", text = body)
         _state.update {
             it.copy(
@@ -584,17 +628,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 tools = emptyList(),
             )
         }
-        dispatch(id, body)
+        dispatch(id, body, files)
     }
 
-    /** The network half of [send], apart so Retry resends without echoing the user turn twice. */
-    private fun dispatch(id: String, body: String): Job = viewModelScope.launch {
+    /** The network half of [send], apart so Retry resends the same body and files without echoing the user turn twice. */
+    private fun dispatch(id: String, body: String, files: List<PromptFile>): Job = viewModelScope.launch {
         _state.update { it.copy(busy = true, error = null) }
-        runCatching { client.send(id, body) }
+        runCatching { client.send(id, body, files) }
+            // The prompt is on the server, so the attachments are no longer pending; Retry replays them itself.
+            .onSuccess { _state.update { it.copy(attachments = emptyList()) } }
             .onFailure { e ->
                 // The prompt never reached the server, so the queued label would be a lie; the error card explains why.
                 _state.update { it.copy(busy = false, queuedId = null) }
-                fail("Could not send the message: ${e.message}") { dispatch(id, body) }
+                fail("Could not send the message: ${e.message}") { dispatch(id, body, files) }
             }
     }
 
