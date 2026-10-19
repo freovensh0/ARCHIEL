@@ -39,9 +39,12 @@ runtime).
   for new sessions kept on the device
 - Attachments: an image or a file picked on the phone travels as a data URL
   the server decodes inline, shows up in the transcript as a thumbnail (open
-  full screen, pinch to zoom) or a file card
+  full screen, pinch to zoom) or a file card; a file the server already has is
+  attached by its `file://` path through an `@file` mention, and a share from
+  another app lands in the dock
 - Delegation: an `@agent` mention in the dock names a subagent, and the prompt
-  carries it so the agent can hand the work over
+  carries it so the agent can hand the work over; a subagent's own session
+  opens read-only under its parent
 - The server's own tools: a shell runner that executes one command and pages
   its output, and a terminal that runs a program over the PTY socket with a
   line input
@@ -49,12 +52,10 @@ runtime).
 ## Phase 5 — attachments and files
 
 - `@file` mention autocomplete backed by the server's path search.
-- Share-in intent: send supported files from other apps into a new session.
 
 ## Phase 6 — agents and delegation
 
 - Subagent list with mode and description in the picker.
-- Session view of a subagent's own transcript (read-only, under the parent).
 
 ## Phase 7 — shells and terminals
 
