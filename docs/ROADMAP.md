@@ -34,30 +34,47 @@ runtime).
   per-session drafts kept on disk, and the server's JSON export handed to the
   share sheet
 
-## Phase 4 — context and cost
+## Phase 4 — context, cost and model control
 
 - Token and cost display under the model picker (from usage parts/totals).
 - Context window bar: input/output/reasoning/cache with remaining capacity.
 - Model picker upgrades: variants, favorites, hide models, provider icons.
 - Agent switcher preserving explicit Plan/Build choice.
+- Default model and agent for new sessions, kept on the device.
 
-## Phase 5 — device integration
+## Phase 5 — attachments and files
+
+- Image attachments with the Android photo picker and a pinch-zoom viewer.
+- `@file` mention autocomplete backed by the server's path search.
+- Share-in intent: send supported files from other apps into a new session.
+- The file has to reach the server as a URI it can read; the copy path depends
+  on where the server runs.
+
+## Phase 6 — agents and delegation
+
+- `@agent` mentions in the dock: pick a subagent, the prompt carries it.
+- Subagent list with mode and description in the picker.
+- Session view of a subagent's own transcript (read-only, under the parent).
+
+## Phase 7 — shells and terminals
+
+- Terminal over the server's PTY endpoints (WebSocket), a tab next to chat.
+- The server's persistent shells (`/api/shell`) as a quick command runner.
+
+## Phase 8 — device integration
 
 - Completion notification: foreground service keeps the event stream alive
   and notifies when `session.execution.succeeded` arrives.
 - Credentials move to EncryptedSharedPreferences behind a biometric prompt.
-- Image attachments with the Android photo picker and a pinch-zoom viewer.
-- `@file` mention autocomplete backed by the server's path search.
-- Share-in intent: send supported files from other apps into a new session.
 
-## Phase 6 — connection depth
+## Phase 9 — connection depth
 
 - Multiple server profiles with connect/disconnect and status dots.
 - HTTPS toggle with optional self-signed trust.
 - Cached sessions readable while disconnected, reconnect banner, backoff.
 - Multi-project discovery (sessions across all server directories).
 
-## Phase 7 — polish
+## Phase 10 — polish
 
 - AMOLED theme, Material You dynamic colour, tablet two-pane chat.
 - Locales: English source plus Turkish.
@@ -65,10 +82,8 @@ runtime).
 - Diagnostics export: privacy-sanitised log share from Settings.
 - Syntax highlighting inside code fences (optional dependency, last).
 
-## Phase 8 — maybe never
+## Phase 11 — maybe never
 
-- Terminal PTY over WebSocket (full TUI in a terminal tab). Heavy, rare on
-  phones; revisit only if server-side PTY endpoints prove common.
 - On-device agent runtime via Termux. Contradicts ARCHIEL's remote-client
   identity; skip.
 
