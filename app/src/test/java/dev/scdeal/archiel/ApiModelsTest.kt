@@ -239,6 +239,22 @@ class ApiModelsTest {
     }
 
     @Test
+    fun `a mentioned agent encodes as its name`() {
+        val row = json.encodeToJsonElement(PromptAgent.serializer(), PromptAgent(name = "reviewer")).jsonObject
+        assertEquals("reviewer", (row["name"] as? JsonPrimitive)?.contentOrNull)
+    }
+
+    @Test
+    fun `a trailing mention yields its word and the rest of the text stays put`() {
+        assertEquals("re", mentionQuery("describe @re"))
+        assertEquals("", mentionQuery("ask @"))
+        assertEquals("code_review-2", mentionQuery("run @code_review-2"))
+        // Only a word at the very end is a mention; a finished one leaves the dock alone.
+        assertEquals(null, mentionQuery("mail @home tomorrow"))
+        assertEquals(null, mentionQuery("no mention here"))
+    }
+
+    @Test
     fun `a user message carries the files sent with the prompt`() {
         val row = """
             {"id":"msg_2","type":"user","text":"Look at this",

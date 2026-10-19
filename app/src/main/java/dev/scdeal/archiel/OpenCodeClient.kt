@@ -155,6 +155,10 @@ data class CommandInfo(val name: String, val description: String? = null)
 @Serializable
 data class PromptFile(val uri: String, val name: String? = null)
 
+/** A subagent named in a prompt; the server stores the name with the message and the primary agent delegates to it. */
+@Serializable
+data class PromptAgent(val name: String)
+
 @Serializable
 data class PermissionRequest(
     val id: String,
@@ -347,11 +351,12 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
             .data
             .firstOrNull()
 
-    suspend fun send(sessionID: String, text: String, files: List<PromptFile> = emptyList()) {
+    suspend fun send(sessionID: String, text: String, files: List<PromptFile> = emptyList(), agents: List<PromptAgent> = emptyList()) {
         val body = buildJsonObject {
             put("text", text)
-            // A prompt with no files must not carry an empty array.
+            // A prompt with no files or mentions must not carry an empty array.
             if (files.isNotEmpty()) put("files", json.encodeToJsonElement(files))
+            if (agents.isNotEmpty()) put("agents", json.encodeToJsonElement(agents))
         }
         call("POST", "/api/session/$sessionID/prompt", body.toString())
     }

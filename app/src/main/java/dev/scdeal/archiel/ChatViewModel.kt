@@ -73,6 +73,8 @@ data class ChatState(
     val draft: String = "",
     /** Files waiting to go out with the next prompt. */
     val attachments: List<Attachment> = emptyList(),
+    /** The subagents this prompt delegates to; the body carries them by name. */
+    val mentions: List<String> = emptyList(),
     /** The exported session file to hand to the share sheet; cleared once the chooser is shown. */
     val shareUri: Uri? = null,
     val usage: Usage? = null,
@@ -107,6 +109,12 @@ private fun sessionSlug(title: String?, fallback: String): String =
 
 /** The pending attachment as the wire sends it: the base64 payload is a data URL the server decodes inline. */
 private fun Attachment.toPromptFile(): PromptFile = PromptFile(uri = "data:$mime;base64,$data", name = name)
+
+/** A trailing "@word"; the group before "@" is the space (or nothing) the rewrite keeps. */
+private val MENTION = Regex("(^|\\s)@([A-Za-z0-9_-]*)$")
+
+/** The word the dock is offering agents for, or null when the text is not sitting on a mention. */
+internal fun mentionQuery(text: String): String? = MENTION.find(text)?.groupValues?.get(2)
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val cfg = Cfg.load(app)
@@ -507,6 +515,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 cutShort = false,
                 draft = drafts.getString(id, "").orEmpty(),
                 attachments = emptyList(),
+                mentions = emptyList(),
                 usage = usageOf(existing),
                 context = null,
                 error = null,
@@ -521,7 +530,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun close() {
         _state.update {
-            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", attachments = emptyList(), shareUri = null, usage = null, context = null)
+            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", attachments = emptyList(), mentions = emptyList(), shareUri = null, usage = null, context = null)
         }
     }
 
@@ -583,6 +592,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(draft = "") }
     }
 
+    /** A suggestion tap: the agent joins the prompt and the typed "@word" becomes its name plus a space. */
+    fun mention(name: String) {
+        if (name !in _state.value.mentions) _state.update { it.copy(mentions = it.mentions + name) }
+        val text = _state.value.draft
+        val match = MENTION.find(text) ?: return
+        draft(text.replaceRange(match.range, match.groupValues[1] + "@$name "))
+    }
+
+    fun unmention(name: String) = _state.update { it.copy(mentions = it.mentions.filterNot { it == name }) }
+
     /**
      * Reads a picked file off the main thread and parks it as a pending attachment. The content resolver
      * is the only source that works for a remote server, since the server never sees the device's disk.
@@ -618,6 +637,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (body.isEmpty()) return
         clearDraft(id)
         val files = _state.value.attachments.map { it.toPromptFile() }
+        val agents = _state.value.mentions.map { PromptAgent(it) }
         val local = Message(id = "local-${System.nanoTime()}", type = "user", text = body)
         _state.update {
             it.copy(
@@ -628,19 +648,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 tools = emptyList(),
             )
         }
-        dispatch(id, body, files)
+        dispatch(id, body, files, agents)
     }
 
-    /** The network half of [send], apart so Retry resends the same body and files without echoing the user turn twice. */
-    private fun dispatch(id: String, body: String, files: List<PromptFile>): Job = viewModelScope.launch {
+    /** The network half of [send], apart so Retry resends the same body, files and mentions without echoing the user turn twice. */
+    private fun dispatch(id: String, body: String, files: List<PromptFile>, agents: List<PromptAgent>): Job = viewModelScope.launch {
         _state.update { it.copy(busy = true, error = null) }
-        runCatching { client.send(id, body, files) }
-            // The prompt is on the server, so the attachments are no longer pending; Retry replays them itself.
-            .onSuccess { _state.update { it.copy(attachments = emptyList()) } }
+        runCatching { client.send(id, body, files, agents) }
+            // The prompt is on the server, so the attachments and mentions are no longer pending; Retry replays them itself.
+            .onSuccess { _state.update { it.copy(attachments = emptyList(), mentions = emptyList()) } }
             .onFailure { e ->
                 // The prompt never reached the server, so the queued label would be a lie; the error card explains why.
                 _state.update { it.copy(busy = false, queuedId = null) }
-                fail("Could not send the message: ${e.message}") { dispatch(id, body, files) }
+                fail("Could not send the message: ${e.message}") { dispatch(id, body, files, agents) }
             }
     }
 

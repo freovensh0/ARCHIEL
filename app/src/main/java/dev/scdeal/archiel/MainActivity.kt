@@ -197,6 +197,8 @@ private fun App() {
             onDraft = vm::draft,
             onAttach = vm::attach,
             onDetach = vm::detach,
+            onMention = vm::mention,
+            onUnmention = vm::unmention,
             onStop = vm::stop,
             onRunCommand = vm::runCommand,
             onReplyPermission = vm::replyPermission,
@@ -703,6 +705,8 @@ private fun ChatScreen(
     onDraft: (String) -> Unit,
     onAttach: (Uri) -> Unit,
     onDetach: (String) -> Unit,
+    onMention: (String) -> Unit,
+    onUnmention: (String) -> Unit,
     onStop: () -> Unit,
     onRunCommand: (String, String) -> Unit,
     onReplyPermission: (String, String) -> Unit,
@@ -806,8 +810,12 @@ private fun ChatScreen(
             commands = state.commands,
             model = state.model,
             attachments = state.attachments,
+            mentions = state.mentions,
+            agents = state.agents,
             onAttach = onAttach,
             onDetach = onDetach,
+            onMention = onMention,
+            onUnmention = onUnmention,
             onSend = {
                 val text = state.draft.trim()
                 if (text.startsWith("/")) {
@@ -1854,10 +1862,14 @@ private fun Dock(
     onInput: (String) -> Unit,
     busy: Boolean,
     commands: List<CommandInfo>,
+    mentions: List<String>,
+    agents: List<AgentInfo>,
     model: String?,
     attachments: List<Attachment>,
     onAttach: (Uri) -> Unit,
     onDetach: (String) -> Unit,
+    onMention: (String) -> Unit,
+    onUnmention: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -1871,6 +1883,14 @@ private fun Dock(
     } else {
         emptyList()
     }
+    // A trailing "@word" is a mention; only the subagents the server did not hide can be delegated to.
+    val mention = if (input.startsWith("/")) null else mentionQuery(input)?.lowercase()
+    val matchingAgents = mention?.let { query ->
+        agents
+            .filter { it.hidden != true && it.mode == "subagent" }
+            .filter { it.name.lowercase().startsWith(query) || it.id.lowercase().startsWith(query) }
+            .take(6)
+    }.orEmpty()
     Column(
         Modifier
             .fillMaxWidth()
@@ -1907,7 +1927,35 @@ private fun Dock(
                 }
             }
         }
-        if (attachments.isNotEmpty()) {
+        if (matchingAgents.isNotEmpty()) {
+            Column(Modifier.padding(horizontal = Space.s, vertical = Space.xs)) {
+                matchingAgents.forEach { agent ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(Radius.chip))
+                            .clickable { onMention(agent.name) }
+                            .padding(horizontal = Space.m, vertical = Space.s),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "@${agent.name}",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                            color = AccentFill,
+                        )
+                        Spacer(Modifier.width(Space.m))
+                        Text(
+                            agent.description.orEmpty(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+        if (attachments.isNotEmpty() || mentions.isNotEmpty()) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -1917,6 +1965,9 @@ private fun Dock(
             ) {
                 attachments.forEach { attachment ->
                     AttachmentChip(attachment) { onDetach(attachment.name) }
+                }
+                mentions.forEach { name ->
+                    MentionChip(name) { onUnmention(name) }
                 }
             }
         }
@@ -2017,6 +2068,36 @@ private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
             contentAlignment = Alignment.Center,
         ) {
             Icon(Icons.Outlined.Close, "Remove the attachment", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+/** A mentioned subagent: the prompt names it, so the chip says who and carries the only action before sending. */
+@Composable
+private fun MentionChip(name: String, onRemove: () -> Unit) {
+    Row(
+        Modifier
+            .heightIn(min = Size.hitSmall)
+            .clip(RoundedCornerShape(Radius.chip))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(Size.hairline, MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.chip))
+            .padding(start = Space.m, end = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "@$name",
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = Mono),
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+        )
+        Box(
+            Modifier
+                .size(Size.hitSmall)
+                .clip(RoundedCornerShape(Radius.chip))
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Outlined.Close, "Remove the mention", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
         }
     }
 }
