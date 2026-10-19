@@ -31,7 +31,11 @@ data class Usage(val tokens: TokenUsage, val cost: Double)
 /** The open session's context fill; the limit is null until the model that ran the last turn is known. */
 data class ContextUsage(val used: Long, val limit: Long?)
 
-data class ChatState(    val sessions: List<Session> = emptyList(),
+data class ChatState(
+    /** Starred and hidden model keys ("provider/model"), kept on disk so they outlive the process. */
+    val favorites: Set<String> = emptySet(),
+    val hidden: Set<String> = emptySet(),
+    val sessions: List<Session> = emptyList(),
     val commands: List<CommandInfo> = emptyList(),
     val agents: List<AgentInfo> = emptyList(),
     val models: List<ModelInfo> = emptyList(),
@@ -96,10 +100,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** Drafts sit on disk, keyed by session id, so a killed process does not lose what you typed. */
     private val drafts = app.getSharedPreferences("drafts", android.content.Context.MODE_PRIVATE)
 
+    /** Favourites and hidden models are device preferences, keyed by "provider/model". */
+    private val modelPrefs = app.getSharedPreferences("models", android.content.Context.MODE_PRIVATE)
+
     // Event payloads carry the same shapes as the API responses; decode them with the same tolerance.
     private val json = Json { ignoreUnknownKeys = true }
 
-    private val _state = MutableStateFlow(ChatState())
+    private val _state = MutableStateFlow(
+        ChatState(
+            favorites = modelPrefs.getStringSet("favorites", emptySet()).orEmpty(),
+            hidden = modelPrefs.getStringSet("hidden", emptySet()).orEmpty(),
+        ),
+    )
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
     /** What Retry re-runs; null means the current sentence has nothing worth replaying. */
@@ -289,14 +301,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setModel(providerID: String, modelID: String) {
+    fun setModel(providerID: String, modelID: String, variant: String? = null) {
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
-            runCatching { client.setModel(id, providerID, modelID) }
-                .onSuccess { _state.update { it.copy(model = "$providerID/$modelID") } }
+            runCatching { client.setModel(id, providerID, modelID, variant) }
+                .onSuccess {
+                    val ref = ModelRef(id = modelID, providerID = providerID, variant = variant)
+                    _state.update {
+                        it.copy(
+                            model = ref.label(),
+                            // Keep the row in step so the pick survives leaving the chat and coming back.
+                            sessions = it.sessions.map { s -> if (s.id == id) s.copy(model = ref) else s },
+                        )
+                    }
+                }
                 .onFailure { e -> fail("Could not switch the model: ${e.message}") }
         }
     }
+
+    fun toggleFavorite(key: String) {
+        val next = flip(_state.value.favorites, key)
+        modelPrefs.edit().putStringSet("favorites", next).apply()
+        _state.update { it.copy(favorites = next) }
+    }
+
+    fun toggleHidden(key: String) {
+        val next = flip(_state.value.hidden, key)
+        modelPrefs.edit().putStringSet("hidden", next).apply()
+        _state.update { it.copy(hidden = next) }
+    }
+
+    private fun flip(set: Set<String>, key: String): Set<String> = if (key in set) set - key else set + key
 
     fun setAgent(agent: String) {
         val id = _state.value.sessionId ?: return

@@ -93,6 +93,18 @@ class ApiModelsTest {
     }
 
     @Test
+    fun `a model row lists its variants and context limit`() {
+        val row = """
+            {"id":"claude-sonnet-4","modelID":"claude-sonnet-4","providerID":"anthropic",
+             "name":"Claude Sonnet 4","variants":[{"id":"high"},{"id":"low"}],
+             "limit":{"context":200000,"output":64000,"input":180000}}
+        """.trimIndent()
+        val model = json.decodeFromString(ModelInfo.serializer(), row)
+        assertEquals(listOf("high", "low"), model.variants?.map { it.id })
+        assertEquals(200000L, model.limit?.context)
+    }
+
+    @Test
     fun `a reasoning part keeps its text and the time it took`() {
         val row = """
             {"id":"prt_1","type":"reasoning",

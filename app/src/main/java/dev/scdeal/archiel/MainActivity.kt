@@ -61,7 +61,10 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Star
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -166,14 +169,16 @@ private fun App() {
         Screen.Pickers -> PickerScreen(
             state = state,
             onBack = { screen = Screen.Chat },
-            onPickModel = { provider, model ->
-                vm.setModel(provider, model)
+            onPickModel = { provider, model, variant ->
+                vm.setModel(provider, model, variant)
                 screen = Screen.Chat
             },
             onPickAgent = { agent ->
                 vm.setAgent(agent)
                 screen = Screen.Chat
             },
+            onToggleFavorite = vm::toggleFavorite,
+            onToggleHidden = vm::toggleHidden,
         )
 
         Screen.Connection -> ConnectionScreen(
@@ -1721,17 +1726,22 @@ private fun Dock(
 private fun PickerScreen(
     state: ChatState,
     onBack: () -> Unit,
-    onPickModel: (String, String) -> Unit,
+    onPickModel: (String, String, String?) -> Unit,
     onPickAgent: (String) -> Unit,
+    onToggleFavorite: (String) -> Unit,
+    onToggleHidden: (String) -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    val models = remember(state.models, query) {
+    val all = remember(state.models, query) {
         val q = query.trim().lowercase()
         state.models
             .filter { q.isEmpty() || it.modelID.lowercase().contains(q) || it.providerID.lowercase().contains(q) }
             .sortedBy { it.providerID }
-            .take(80)
     }
+    // A hidden model leaves the live sections and waits in HIDDEN, so it can always be brought back.
+    val favorites = all.filter { modelKey(it) in state.favorites }
+    val hidden = all.filter { modelKey(it) in state.hidden }
+    val rest = all.filterNot { modelKey(it) in state.favorites || modelKey(it) in state.hidden }.take(80)
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopBar(title = "Model and agent", onBack = onBack)
@@ -1768,14 +1778,7 @@ private fun PickerScreen(
         )
         LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
             if (query.isEmpty()) {
-                item("agents") {
-                    Text(
-                        "AGENT",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(horizontal = Space.l, vertical = Space.s),
-                    )
-                }
+                item("agents") { SectionLabel("AGENT") }
                 items(state.agents, key = { "agent-${it.id}" }) { agent ->
                     PickerRow(
                         title = agent.name,
@@ -1785,28 +1788,175 @@ private fun PickerScreen(
                         onClick = { onPickAgent(agent.id) },
                     )
                 }
-                item("models") {
-                    Text(
-                        "MODEL",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(horizontal = Space.l, vertical = Space.s),
+            }
+            if (favorites.isNotEmpty()) {
+                if (query.isEmpty()) item("favorites") { SectionLabel("FAVORITES") }
+                items(favorites, key = { "fav-${modelKey(it)}" }) { model ->
+                    ModelRow(
+                        model = model,
+                        selectedModel = state.model,
+                        favorite = true,
+                        hidden = false,
+                        enabled = true,
+                        onPick = { variant -> onPickModel(model.providerID, model.modelID, variant) },
+                        onToggleFavorite = { onToggleFavorite(modelKey(model)) },
+                        onToggleHidden = { onToggleHidden(modelKey(model)) },
                     )
                 }
             }
-            items(models, key = { "${it.providerID}/${it.modelID}" }) { model ->
-                PickerRow(
-                    title = model.modelID,
-                    detail = model.providerID,
-                    selected = state.model == "${model.providerID}/${model.modelID}",
-                    mono = true,
-                    onClick = { onPickModel(model.providerID, model.modelID) },
-                )
+            if (rest.isNotEmpty()) {
+                if (query.isEmpty()) item("models") { SectionLabel("MODEL") }
+                items(rest, key = { "model-${modelKey(it)}" }) { model ->
+                    ModelRow(
+                        model = model,
+                        selectedModel = state.model,
+                        favorite = false,
+                        hidden = false,
+                        enabled = true,
+                        onPick = { variant -> onPickModel(model.providerID, model.modelID, variant) },
+                        onToggleFavorite = { onToggleFavorite(modelKey(model)) },
+                        onToggleHidden = { onToggleHidden(modelKey(model)) },
+                    )
+                }
             }
-            if (models.isEmpty()) {
+            if (hidden.isNotEmpty()) {
+                if (query.isEmpty()) item("hidden") { SectionLabel("HIDDEN") }
+                items(hidden, key = { "hidden-${modelKey(it)}" }) { model ->
+                    ModelRow(
+                        model = model,
+                        selectedModel = state.model,
+                        favorite = modelKey(model) in state.favorites,
+                        hidden = true,
+                        enabled = false,
+                        onPick = { variant -> onPickModel(model.providerID, model.modelID, variant) },
+                        onToggleFavorite = { onToggleFavorite(modelKey(model)) },
+                        onToggleHidden = { onToggleHidden(modelKey(model)) },
+                    )
+                }
+            }
+            if (all.isEmpty()) {
                 item("none") { Centered("No match", "Nothing on this server matches that search.") }
             }
         }
+    }
+}
+
+/** Favourites and hidden sets key a model by "provider/model", the shape its label takes. */
+private fun modelKey(model: ModelInfo): String = "${model.providerID}/${model.modelID}"
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.padding(horizontal = Space.l, vertical = Space.s),
+    )
+}
+
+@Composable
+private fun ModelRow(
+    model: ModelInfo,
+    selectedModel: String?,
+    favorite: Boolean,
+    hidden: Boolean,
+    enabled: Boolean,
+    onPick: (String?) -> Unit,
+    onToggleFavorite: () -> Unit,
+    onToggleHidden: () -> Unit,
+) {
+    val plain = ModelRef(id = model.modelID, providerID = model.providerID).label()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = { onPick(null) })
+            .heightIn(min = Size.row)
+            .padding(start = Space.l, end = Space.xs, vertical = Space.s)
+            // Dimmed rather than dropped: a hidden model still has to be reachable from here.
+            .alpha(if (hidden) 0.5f else 1f),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                model.modelID,
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                color = if (selectedModel == plain) AccentFill else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                model.providerID,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (selectedModel == plain) {
+            Spacer(Modifier.width(Space.m))
+            LiveDot(AccentFill)
+        }
+        PickerIcon(
+            icon = if (favorite) Icons.Outlined.Star else Icons.Outlined.StarBorder,
+            label = if (favorite) "Remove from favourites" else "Add to favourites",
+            onClick = onToggleFavorite,
+        )
+        PickerIcon(
+            icon = Icons.Outlined.VisibilityOff,
+            label = if (hidden) "Unhide this model" else "Hide this model",
+            onClick = onToggleHidden,
+        )
+    }
+    // A hidden model shows only the row that brings it back, so its variants do not stay pickable.
+    if (enabled) {
+        model.variants.orEmpty().forEach { variant ->
+            VariantRow(
+                id = variant.id,
+                selected = selectedModel == ModelRef(id = model.modelID, providerID = model.providerID, variant = variant.id).label(),
+                onPick = { onPick(variant.id) },
+            )
+        }
+    }
+    Hairline()
+}
+
+/** A variant sits indented under its model and picks that model with the variant set. */
+@Composable
+private fun VariantRow(id: String, selected: Boolean, onPick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onPick)
+            .heightIn(min = Size.hit)
+            .padding(start = Space.xxl, end = Space.l, vertical = Space.s),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            id,
+            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+            color = if (selected) AccentFill else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (selected) {
+            Spacer(Modifier.width(Space.m))
+            LiveDot(AccentFill)
+        }
+    }
+    Hairline()
+}
+
+@Composable
+private fun PickerIcon(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(Size.hitSmall)
+            .clip(RoundedCornerShape(Radius.chip))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, label, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
     }
 }
 

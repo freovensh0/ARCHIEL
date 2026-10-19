@@ -108,8 +108,8 @@ data class PartText(val type: String? = null, val text: String? = null)
 @Serializable
 data class AgentInfo(val id: String, val name: String, val mode: String? = null, val description: String? = null)
 
-// `cost` and `variants` arrive as arrays and nothing reads them, so they stay out of the model
-// rather than making the whole list undecodable.
+// `cost` arrives as an array and nothing reads it, so it stays out of the model rather than making
+// the whole list undecodable.
 @Serializable
 data class ModelInfo(
     val providerID: String,
@@ -117,7 +117,11 @@ data class ModelInfo(
     val name: String? = null,
     val id: String? = null,
     val limit: ModelLimit? = null,
+    val variants: List<ModelVariant>? = null,
 )
+
+@Serializable
+data class ModelVariant(val id: String)
 
 @Serializable
 data class ModelLimit(val context: Long = 0, val output: Long = 0)
@@ -263,11 +267,13 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
         call("DELETE", "/api/session/$sessionID/form/$formID")
     }
 
-    suspend fun setModel(sessionID: String, providerID: String, modelID: String) {
+    suspend fun setModel(sessionID: String, providerID: String, modelID: String, variant: String? = null) {
         val body = buildJsonObject {
             put("model", buildJsonObject {
                 put("providerID", providerID)
                 put("id", modelID)
+                // The server rejects a null variant, so it is omitted until the model has one.
+                if (variant != null) put("variant", variant)
             })
         }
         call("POST", "/api/session/$sessionID/model", body.toString())
