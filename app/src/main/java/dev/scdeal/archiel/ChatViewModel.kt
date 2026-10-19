@@ -26,6 +26,7 @@ import kotlinx.serialization.json.contentOrNull
 import okhttp3.WebSocket
 import java.io.File
 import java.io.IOException
+import java.net.URLEncoder
 import kotlin.math.min
 
 /** The session totals: live from `session.usage.updated`, seeded from the session list on open. */
@@ -40,8 +41,9 @@ data class ShellRun(val id: String, val command: String, val output: String = ""
 /** The terminal run: live output from a PTY socket, and the exit code once the socket closed. */
 data class PtyRun(val id: String, val title: String, val command: String, val output: String = "", val status: String? = null, val exitCode: Int? = null)
 
-/** A file picked for the next prompt. `data` is the canonical base64 payload, kept so Retry can resend it. */
-data class Attachment(val name: String, val mime: String, val bytes: Int, val data: String)
+/** A pending attachment: a file picked for the next prompt. `data` is the canonical base64 payload, kept so
+ *  Retry can resend it; a file the server already has carries its `file://` uri instead. */
+data class Attachment(val name: String, val mime: String, val bytes: Int, val data: String, val uri: String? = null)
 
 data class ChatState(
     /** Starred and hidden model keys ("provider/model"), kept on disk so they outlive the process. */
@@ -80,6 +82,8 @@ data class ChatState(
     val draft: String = "",
     /** Files waiting to go out with the next prompt. */
     val attachments: List<Attachment> = emptyList(),
+    /** The server's own files matching the dock's live "@word"; empty while there is no mention. */
+    val fileMatches: List<FileEntry> = emptyList(),
     /** The subagents this prompt delegates to; the body carries them by name. */
     val mentions: List<String> = emptyList(),
     /** The exported session file to hand to the share sheet; cleared once the chooser is shown. */
@@ -126,14 +130,19 @@ private fun sessionSlug(title: String?, fallback: String): String =
         .take(40)
         .ifEmpty { fallback }
 
-/** The pending attachment as the wire sends it: the base64 payload is a data URL the server decodes inline. */
-private fun Attachment.toPromptFile(): PromptFile = PromptFile(uri = "data:$mime;base64,$data", name = name)
+/** The pending attachment as the wire sends it: a server file by its `file://` uri, a local pick as a data URL. */
+private fun Attachment.toPromptFile(): PromptFile = PromptFile(uri = uri ?: "data:$mime;base64,$data", name = name)
 
-/** A trailing "@word"; the group before "@" is the space (or nothing) the rewrite keeps. */
-private val MENTION = Regex("(^|\\s)@([A-Za-z0-9_-]*)$")
+/** A trailing "@word"; the group before "@" is the space (or nothing) the rewrite keeps. A path is one word too. */
+private val MENTION = Regex("(^|\\s)@([A-Za-z0-9_./-]*)$")
 
 /** The word the dock is offering agents for, or null when the text is not sitting on a mention. */
 internal fun mentionQuery(text: String): String? = MENTION.find(text)?.groupValues?.get(2)
+
+/** The absolute `file://` uri a server file is attached by; each segment encodes on its own, so its
+ *  separators stay separators (encoding the whole path would turn them into %2F). */
+internal fun fileUri(directory: String, path: String): String =
+    "file://${directory.trimEnd('/')}/" + path.split("/").joinToString("/") { URLEncoder.encode(it, "UTF-8").replace("+", "%20") }
 
 /** CSI colour/cursor codes and OSC titles: a command that colours its output would otherwise dump them on screen. */
 private val ANSI = Regex("\u001B(?:\\[[0-9;?]*[ -/]*[@-~]|\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\)|[ -/]*[@-~])")
@@ -172,6 +181,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The in-flight debounce for the sessions search, so typing cancels the request before it fires. */
     private var searchJob: Job? = null
+
+    /** The in-flight debounce for the dock's file search, and the word it was asked for. */
+    private var filesJob: Job? = null
+    private var fileQuery = ""
 
     /** The shell polling loop; one at a time, and `close()` cancels it. */
     private var shellJob: Job? = null
@@ -550,6 +563,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 draft = drafts.getString(id, "").orEmpty(),
                 attachments = emptyList(),
                 mentions = emptyList(),
+                // The matches belong to the directory that was open; a new one searches its own.
+                fileMatches = emptyList(),
                 usage = usageOf(existing),
                 context = null,
                 error = null,
@@ -637,12 +652,57 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** A suggestion tap: the agent joins the prompt and the typed "@word" becomes its name plus a space. */
     fun mention(name: String) {
         if (name !in _state.value.mentions) _state.update { it.copy(mentions = it.mentions + name) }
+        rewriteMention(name)
+    }
+
+    fun unmention(name: String) = _state.update { it.copy(mentions = it.mentions.filterNot { it == name }) }
+
+    /** The typed "@word" becomes the picked name plus a space; the agent list and the file list both land here. */
+    private fun rewriteMention(name: String) {
         val text = _state.value.draft
         val match = MENTION.find(text) ?: return
         draft(text.replaceRange(match.range, match.groupValues[1] + "@$name "))
     }
 
-    fun unmention(name: String) = _state.update { it.copy(mentions = it.mentions.filterNot { it == name }) }
+    /**
+     * A file the server already has, attached by its absolute `file://` uri: the server reads it from
+     * its own disk, which is the only way a picked path means anything for a remote session.
+     */
+    fun attachServerFile(path: String) {
+        val directory = _state.value.location
+        if (directory == null) {
+            fail("This server session has no working directory, so its files cannot be attached.")
+            return
+        }
+        _state.update { it.copy(attachments = it.attachments + Attachment(name = path, mime = "", bytes = 0, data = "", uri = fileUri(directory, path))) }
+        rewriteMention(path)
+    }
+
+    /**
+     * The dock's "@word" search against the server's own files: one request per pause, and a slow answer
+     * for a word the user has typed past is dropped.
+     */
+    fun findFiles(query: String) {
+        val word = query.trim()
+        fileQuery = word
+        filesJob?.cancel()
+        if (word.isEmpty()) {
+            _state.update { it.copy(fileMatches = emptyList()) }
+            return
+        }
+        filesJob = viewModelScope.launch {
+            delay(SEARCH_DEBOUNCE_MS)
+            // A failed lookup is not worth a card: the agent list and a path typed by hand still work.
+            val matches = try {
+                client.findFiles(word, _state.value.location)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                emptyList()
+            }
+            if (fileQuery == word) _state.update { it.copy(fileMatches = matches) }
+        }
+    }
 
     /**
      * Reads a picked file off the main thread and parks it as a pending attachment. The content resolver

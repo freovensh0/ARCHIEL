@@ -203,6 +203,8 @@ private fun App() {
             onDetach = vm::detach,
             onMention = vm::mention,
             onUnmention = vm::unmention,
+            onAttachFile = vm::attachServerFile,
+            onFindFiles = vm::findFiles,
             onStop = vm::stop,
             onRunCommand = vm::runCommand,
             onReplyPermission = vm::replyPermission,
@@ -727,6 +729,8 @@ private fun ChatScreen(
     onDetach: (String) -> Unit,
     onMention: (String) -> Unit,
     onUnmention: (String) -> Unit,
+    onAttachFile: (String) -> Unit,
+    onFindFiles: (String) -> Unit,
     onStop: () -> Unit,
     onRunCommand: (String, String) -> Unit,
     onReplyPermission: (String, String) -> Unit,
@@ -767,6 +771,10 @@ private fun ChatScreen(
     // Commands are per directory and the server registers plugins late, so ask again when the dock
     // reaches for the list rather than trusting what was fetched at startup.
     LaunchedEffect(state.draft.startsWith("/")) { if (state.draft.startsWith("/")) onLoadCommands() }
+
+    // One "@word" drives both the agent list and the server's own file search; no word clears the files.
+    val mentionWord = if (state.draft.startsWith("/")) null else mentionQuery(state.draft)
+    LaunchedEffect(mentionWord) { onFindFiles(mentionWord.orEmpty()) }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopBar(
@@ -836,10 +844,12 @@ private fun ChatScreen(
             attachments = state.attachments,
             mentions = state.mentions,
             agents = state.agents,
+            files = state.fileMatches,
             onAttach = onAttach,
             onDetach = onDetach,
             onMention = onMention,
             onUnmention = onUnmention,
+            onAttachFile = onAttachFile,
             onSend = {
                 val text = state.draft.trim()
                 if (text.startsWith("/")) {
@@ -1889,12 +1899,14 @@ private fun Dock(
     commands: List<CommandInfo>,
     mentions: List<String>,
     agents: List<AgentInfo>,
+    files: List<FileEntry>,
     model: String?,
     attachments: List<Attachment>,
     onAttach: (Uri) -> Unit,
     onDetach: (String) -> Unit,
     onMention: (String) -> Unit,
     onUnmention: (String) -> Unit,
+    onAttachFile: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -1952,8 +1964,14 @@ private fun Dock(
                 }
             }
         }
-        if (matchingAgents.isNotEmpty()) {
-            Column(Modifier.padding(horizontal = Space.s, vertical = Space.xs)) {
+        if (mention != null && (matchingAgents.isNotEmpty() || files.isNotEmpty())) {
+            // Agents and files can fill more than the screen above the field, so the block scrolls in a bound.
+            Column(
+                Modifier
+                    .padding(horizontal = Space.s, vertical = Space.xs)
+                    .heightIn(max = Size.row * 6)
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 matchingAgents.forEach { agent ->
                     Row(
                         Modifier
@@ -1973,6 +1991,25 @@ private fun Dock(
                             agent.description.orEmpty(),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                // The server's files for the same word; a path is the whole row, so it needs no label.
+                files.forEach { file ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(Radius.chip))
+                            .clickable { onAttachFile(file.path) }
+                            .padding(horizontal = Space.m, vertical = Space.s),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            file.path,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                            color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -2080,7 +2117,8 @@ private fun AttachmentChip(attachment: Attachment, onRemove: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "${attachment.name} · ${fileSize(attachment.bytes)}",
+            // A server file is attached by path, so its size is unknown rather than zero.
+            if (attachment.bytes > 0) "${attachment.name} · ${fileSize(attachment.bytes)}" else attachment.name,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,

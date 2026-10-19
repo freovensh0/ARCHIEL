@@ -226,6 +226,35 @@ class ApiModelsTest {
     }
 
     @Test
+    fun `a file search answer lists the paths relative to the directory`() {
+        val row = """
+            {"location":{"directory":"/home/x/project"},
+             "data":[{"path":"app/src/main/java/dev/scdeal/archiel/Theme.kt","type":"file"},
+                     {"path":"docs/notes with space.md","type":"file"}]}
+        """.trimIndent()
+        val files = json.parseToJsonElement(row).jsonObject.getValue("data").jsonArray
+            .map { json.decodeFromJsonElement(FileEntry.serializer(), it) }
+        assertEquals(2, files.size)
+        assertEquals("app/src/main/java/dev/scdeal/archiel/Theme.kt", files[0].path)
+        assertEquals("file", files[0].type)
+        assertEquals("docs/notes with space.md", files[1].path)
+        // An older row carries only the path, so the type stays null rather than failing the decode.
+        val bare = json.decodeFromString(FileEntry.serializer(), """{"path":"README.md"}""")
+        assertEquals("README.md", bare.path)
+        assertEquals(null, bare.type)
+    }
+
+    @Test
+    fun `a server file becomes an absolute uri with its spaces encoded`() {
+        assertEquals(
+            "file:///home/x/project/docs/notes%20with%20space.md",
+            fileUri("/home/x/project", "docs/notes with space.md"),
+        )
+        // A directory with a trailing slash must not double the separator.
+        assertEquals("file:///srv/app/README.md", fileUri("/srv/app/", "README.md"))
+    }
+
+    @Test
     fun `a prompt file carries its uri and an optional name`() {
         val named = json.encodeToJsonElement(
             PromptFile.serializer(),

@@ -159,6 +159,10 @@ data class CommandInfo(val name: String, val description: String? = null)
 @Serializable
 data class PromptFile(val uri: String, val name: String? = null)
 
+/** One file the server's own path search found; `path` is relative to the directory it searched. */
+@Serializable
+data class FileEntry(val path: String, val type: String? = null)
+
 /** A subagent named in a prompt; the server stores the name with the message and the primary agent delegates to it. */
 @Serializable
 data class PromptAgent(val name: String)
@@ -301,6 +305,14 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
     suspend fun commands(directory: String? = null): List<CommandInfo> {
         val query = directory?.let { "?location[directory]=" + URLEncoder.encode(it, "UTF-8") }.orEmpty()
         return json.decodeFromString(Data.serializer(CommandInfo.serializer()), call("GET", "/api/command$query")).data
+    }
+
+    /** The server's own file search, scoped to the session's directory so a relative path stays clickable. */
+    suspend fun findFiles(query: String, directory: String?): List<FileEntry> {
+        // A path and a query encode a space as %20, not the + a form body would use.
+        val word = URLEncoder.encode(query, "UTF-8").replace("+", "%20")
+        val location = directory?.let { "&location[directory]=" + URLEncoder.encode(it, "UTF-8").replace("+", "%20") }.orEmpty()
+        return json.decodeFromString(Data.serializer(FileEntry.serializer()), call("GET", "/api/fs/find?query=$word&type=file&limit=8$location")).data
     }
 
     /** A one-shot runner: the server owns the process and pages its combined output back by cursor. */
