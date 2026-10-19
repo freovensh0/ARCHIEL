@@ -48,14 +48,9 @@ runtime).
 - The server's own tools: a shell runner that executes one command and pages
   its output, and a terminal that runs a program over the PTY socket with a
   line input
-
-## Phase 5 — attachments and files
-
-- `@file` mention autocomplete backed by the server's path search.
-
-## Phase 6 — agents and delegation
-
-- Subagent list with mode and description in the picker.
+- Several servers: the connection screen keeps a list of profiles (a name, an
+  address, a password), the active one carries the status dot, and switching
+  one remakes the connection
 
 ## Phase 7 — shells and terminals
 
@@ -70,7 +65,6 @@ runtime).
 
 ## Phase 9 — connection depth
 
-- Multiple server profiles with connect/disconnect and status dots.
 - HTTPS toggle with optional self-signed trust.
 - Cached sessions readable while disconnected, reconnect banner, backoff.
 - Multi-project discovery (sessions across all server directories).
