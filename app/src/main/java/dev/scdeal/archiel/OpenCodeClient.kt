@@ -21,6 +21,10 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okio.ByteString
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -206,11 +210,25 @@ data class ShellInfo(val id: String, val status: String? = null, val command: St
 @Serializable
 data class ShellOutput(val output: String = "", val cursor: Long = 0, val size: Long = 0, val truncated: Boolean = false)
 
+/** One server-run PTY: a program with a real stdin, unlike the one-shot [ShellInfo]. */
+@Serializable
+data class PtyInfo(
+    val id: String,
+    val title: String? = null,
+    val command: String? = null,
+    val status: String? = null,
+    val exitCode: Int? = null,
+)
+
 @Serializable
 private class Data<T>(val data: List<T> = emptyList())
 
 @Serializable
 private class One<T>(val data: T)
+
+/** The short-lived ticket that authenticates one PTY socket. */
+@Serializable
+private class Ticket(val ticket: String)
 
 internal fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 
@@ -239,6 +257,12 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
+    // A PTY socket sits idle between keystrokes, so it pings to keep the connection from being dropped.
+    private val socketClient = OkHttpClient.Builder()
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .pingInterval(20, TimeUnit.SECONDS)
+        .build()
+
     // The server checks Basic auth; the user name is fixed, the password is printed at startup.
     private val auth: String = "Basic " + Base64.encodeToString(
         "opencode:$password".toByteArray(Charsets.UTF_8),
@@ -249,10 +273,12 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
         .url(base + path)
         .header("Authorization", auth)
 
-    private suspend fun call(method: String, path: String, body: String? = null): String =
+    private suspend fun call(method: String, path: String, body: String? = null, headers: Map<String, String> = emptyMap()): String =
         withContext(Dispatchers.IO) {
             val payload = (body ?: "{}").toRequestBody(JSON_TYPE)
-            val req = request(path).method(method, if (method == "GET" || method == "DELETE") null else payload).build()
+            val builder = request(path)
+            headers.forEach { (name, value) -> builder.header(name, value) }
+            val req = builder.method(method, if (method == "GET" || method == "DELETE") null else payload).build()
             http.newCall(req).execute().use { r ->
                 val text = r.body?.string().orEmpty()
                 if (!r.isSuccessful) throw IOException("$method $path → ${r.code}. ${text.take(180)}")
@@ -292,6 +318,68 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
 
     suspend fun shellOutput(id: String, cursor: Long): ShellOutput =
         json.decodeFromString(One.serializer(ShellOutput.serializer()), call("GET", "/api/shell/$id/output?cursor=$cursor")).data
+
+    /** A PTY is a program with a stdin, unlike [runShell]: the first word is exec'd with the rest as args. */
+    suspend fun createPty(command: String, args: List<String> = emptyList(), cwd: String? = null, title: String? = null): PtyInfo {
+        val body = buildJsonObject {
+            put("command", command)
+            if (args.isNotEmpty()) put("args", json.encodeToJsonElement(args))
+            if (cwd != null) put("cwd", cwd)
+            if (title != null) put("title", title)
+        }
+        return json.decodeFromString(One.serializer(PtyInfo.serializer()), call("POST", "/api/pty", body.toString())).data
+    }
+
+    suspend fun pty(id: String): PtyInfo =
+        json.decodeFromString(One.serializer(PtyInfo.serializer()), call("GET", "/api/pty/$id")).data
+
+    /** The server kills the process with the row. */
+    suspend fun deletePty(id: String) {
+        call("DELETE", "/api/pty/$id")
+    }
+
+    /** The socket is authenticated by a ticket, not by the Basic header alone; the header names the kind. */
+    suspend fun ptyTicket(id: String): String =
+        json.decodeFromString(One.serializer(Ticket.serializer()), call("POST", "/api/pty/$id/connect-token", headers = mapOf("x-opencode-ticket" to "1"))).data.ticket
+
+    /**
+     * Opens the PTY socket and routes its frames to the callbacks. Text frames are raw terminal chunks,
+     * the one binary frame is the absolute output cursor, and a close or failure ends the run. The
+     * caller owns the returned socket and closes it. Resize (`PUT /api/pty/{id}`) is not wired:
+     * the phone only reads and sends lines, so the server's default size is enough.
+     */
+    fun ptySocket(
+        id: String,
+        ticket: String,
+        directory: String?,
+        onText: (String) -> Unit,
+        onControl: (Long) -> Unit,
+        onClosed: () -> Unit,
+    ): WebSocket {
+        // http -> ws and https -> wss fall out of the same prefix swap.
+        val scheme = base.replaceFirst("http", "ws")
+        // A path segment encodes a space as %20, not the + a form body would use.
+        val location = directory?.let { "&location[directory]=" + URLEncoder.encode(it, "UTF-8").replace("+", "%20") }.orEmpty()
+        val url = "$scheme/api/pty/$id/connect?ticket=${URLEncoder.encode(ticket, "UTF-8")}$location"
+        val req = Request.Builder().url(url).header("Authorization", auth).build()
+        return socketClient.newWebSocket(req, object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) = onText(text)
+
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                // The one binary frame is the cursor: a 0x00 byte, then the JSON. Anything else is output.
+                val raw = bytes.toByteArray()
+                if (raw.isEmpty() || raw[0] != 0.toByte()) return
+                val cursor = runCatching {
+                    json.parseToJsonElement(String(raw, 1, raw.size - 1, Charsets.UTF_8)).jsonObject.str("cursor")?.toLongOrNull()
+                }.getOrNull()
+                if (cursor != null) onControl(cursor)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = onClosed()
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = onClosed()
+        })
+    }
 
     suspend fun permissions(sessionID: String): List<PermissionRequest> =
         json.decodeFromString(Data.serializer(PermissionRequest.serializer()), call("GET", "/api/session/$sessionID/permission")).data

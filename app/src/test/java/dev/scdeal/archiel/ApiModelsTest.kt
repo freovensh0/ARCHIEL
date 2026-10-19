@@ -321,6 +321,28 @@ class ApiModelsTest {
     }
 
     @Test
+    fun `a pty row decodes its status and exit code`() {
+        val row = """
+            {"location":{"directory":"/home/x/project"},
+             "data":{"id":"pty_1","title":"npm run dev","command":"npm","args":["run","dev"],
+                     "cwd":"/home/x/project","status":"running","pid":4242}}
+        """.trimIndent()
+        val pty = json.decodeFromJsonElement(PtyInfo.serializer(), json.parseToJsonElement(row).jsonObject.getValue("data"))
+        assertEquals("pty_1", pty.id)
+        assertEquals("npm run dev", pty.title)
+        assertEquals("npm", pty.command)
+        assertEquals("running", pty.status)
+        // A still-running pty has no exit code yet, so the field stays null rather than failing the decode.
+        assertEquals(null, pty.exitCode)
+        val exited = json.decodeFromJsonElement(
+            PtyInfo.serializer(),
+            json.parseToJsonElement("""{"id":"pty_2","status":"exited","exitCode":0}"""),
+        )
+        assertEquals("exited", exited.status)
+        assertEquals(0, exited.exitCode)
+    }
+
+    @Test
     fun `shell escape sequences come out of the output`() {
         // A command that colours its output would otherwise dump CSI codes onto the phone.
         assertEquals("failed: 1 test\n", stripAnsi("\u001B[31mfailed\u001B[0m: 1 test\n"))

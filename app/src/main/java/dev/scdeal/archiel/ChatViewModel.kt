@@ -23,6 +23,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import okhttp3.WebSocket
 import java.io.File
 import java.io.IOException
 import kotlin.math.min
@@ -35,6 +36,9 @@ data class ContextUsage(val used: Long, val limit: Long?)
 
 /** The last command run in the shell screen: its paged output and, once it exits, its code. */
 data class ShellRun(val id: String, val command: String, val output: String = "", val status: String? = null, val exit: Int? = null)
+
+/** The terminal run: live output from a PTY socket, and the exit code once the socket closed. */
+data class PtyRun(val id: String, val title: String, val command: String, val output: String = "", val status: String? = null, val exitCode: Int? = null)
 
 /** A file picked for the next prompt. `data` is the canonical base64 payload, kept so Retry can resend it. */
 data class Attachment(val name: String, val mime: String, val bytes: Int, val data: String)
@@ -85,6 +89,9 @@ data class ChatState(
     /** The shell screen's run; cleared when the chat closes, which is also what stops its polling. */
     val shell: ShellRun? = null,
     val shellBusy: Boolean = false,
+    /** The terminal screen's run; cleared when the chat closes, which also closes its socket. */
+    val pty: PtyRun? = null,
+    val ptyBusy: Boolean = false,
     val error: String? = null,
 )
 
@@ -168,6 +175,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The shell polling loop; one at a time, and `close()` cancels it. */
     private var shellJob: Job? = null
+
+    /** The open terminal socket and the run that owns it: a replaced run's close must not clear the new one. */
+    private var ptySocket: WebSocket? = null
+    private var ptyId: String? = null
+
+    /** The server's absolute output cursor from the socket's one control frame; the text frames carry the output. */
+    private var ptyCursor = 0L
 
     private val _canRetry = MutableStateFlow(false)
     val canRetry: StateFlow<Boolean> = _canRetry.asStateFlow()
@@ -551,8 +565,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun close() {
         // Leaving the chat is what stops the shell polling; the run is dropped with it.
         shellJob?.cancel()
+        // The terminal is the same: the socket closes and the program is killed on the server.
+        val pty = ptyId
+        ptySocket?.close(1000, null)
+        ptySocket = null
+        ptyId = null
+        if (pty != null) viewModelScope.launch { runCatching { client.deletePty(pty) } }
         _state.update {
-            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", attachments = emptyList(), mentions = emptyList(), shareUri = null, usage = null, context = null, shell = null, shellBusy = false)
+            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", attachments = emptyList(), mentions = emptyList(), shareUri = null, usage = null, context = null, shell = null, shellBusy = false, pty = null, ptyBusy = false)
         }
     }
 
@@ -755,6 +775,85 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             _state.update { it.copy(shellBusy = false, shell = it.shell?.copy(status = status, exit = exit)) }
         }
+    }
+
+    /**
+     * Runs a program on the server over the PTY socket, which gives it a real stdin. It is not a
+     * shell: the first word is the command and the rest are its arguments, exec'd directly, so
+     * quoting is the program's business. The output arrives live on the socket.
+     */
+    fun startPty(command: String) {
+        val line = command.trim()
+        if (line.isEmpty()) return
+        val words = line.split(Regex("\\s+"))
+        val directory = _state.value.location
+        // A second Start replaces the first; the old socket and its program go before a new one opens.
+        stopPty()
+        viewModelScope.launch {
+            _state.update { it.copy(ptyBusy = true, error = null) }
+            val created = try {
+                client.createPty(words.first(), words.drop(1), cwd = directory, title = line)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(ptyBusy = false) }
+                fail("Could not start the terminal: ${e.message}")
+                return@launch
+            }
+            val ticket = try {
+                client.ptyTicket(created.id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(ptyBusy = false) }
+                fail("Could not start the terminal: ${e.message}")
+                return@launch
+            }
+            ptyId = created.id
+            ptyCursor = 0L
+            _state.update { it.copy(ptyBusy = true, pty = PtyRun(id = created.id, title = created.title ?: line, command = line, status = "running")) }
+            ptySocket = client.ptySocket(
+                id = created.id,
+                ticket = ticket,
+                directory = directory,
+                // The frames arrive on OkHttp's own thread; the state belongs to the main one.
+                onText = { chunk ->
+                    viewModelScope.launch {
+                        _state.update { s -> s.copy(pty = s.pty?.let { it.copy(output = it.output + stripAnsi(chunk)) }) }
+                    }
+                },
+                onControl = { cursor -> ptyCursor = cursor },
+                onClosed = { finishPty(created.id) },
+            )
+        }
+    }
+
+    /** The socket closed, so the run is over; read the row once for the server's exit code. */
+    private fun finishPty(id: String) {
+        if (ptyId != id) return
+        ptySocket = null
+        ptyId = null
+        viewModelScope.launch {
+            val info = runCatching { client.pty(id) }.getOrNull()
+            _state.update { s ->
+                s.copy(ptyBusy = false, pty = s.pty?.copy(status = info?.status ?: "exited", exitCode = info?.exitCode))
+            }
+        }
+    }
+
+    /** A line of keystrokes; a terminal reads the newline as Enter. */
+    fun ptyInput(line: String) {
+        ptySocket?.send(line + "\n")
+    }
+
+    /** Closes the socket and kills the program on the server. */
+    fun stopPty() {
+        val id = ptyId
+        ptySocket?.close(1000, null)
+        ptySocket = null
+        ptyId = null
+        _state.update { it.copy(ptyBusy = false, pty = it.pty?.copy(status = "exited")) }
+        if (id != null) viewModelScope.launch { runCatching { client.deletePty(id) } }
     }
 
     /** Fetched per visible row: one small request, cached for the life of the screen. */

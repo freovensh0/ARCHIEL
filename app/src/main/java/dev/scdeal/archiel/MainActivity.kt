@@ -75,6 +75,7 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.StarBorder
@@ -147,7 +148,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { Sessions, Chat, Shell, Connection, Pickers }
+private enum class Screen { Sessions, Chat, Shell, Terminal, Connection, Pickers }
 
 /** The picker serves the open session or one of the two new-session defaults. */
 private enum class PickerMode { Session, DefaultModel, DefaultAgent }
@@ -175,6 +176,7 @@ private fun App() {
         screen = when (screen) {
             Screen.Pickers -> if (pickerMode == PickerMode.Session) Screen.Chat else Screen.Connection
             Screen.Shell -> Screen.Chat
+            Screen.Terminal -> Screen.Chat
             else -> Screen.Sessions
         }
     }
@@ -208,6 +210,7 @@ private fun App() {
             onCancelForm = vm::cancelForm,
             onOpenPickers = { openPicker(PickerMode.Session) },
             onShell = { screen = Screen.Shell },
+            onTerminal = { screen = Screen.Terminal },
             onLoadCommands = vm::loadCommands,
             onRename = { vm.runCommand("rename", it) },
             onDelete = { vm.deleteSession { vm.close(); screen = Screen.Sessions } },
@@ -219,6 +222,14 @@ private fun App() {
             state = state,
             onBack = { screen = Screen.Chat },
             onRun = vm::runShell,
+        )
+
+        Screen.Terminal -> TerminalScreen(
+            state = state,
+            onBack = { screen = Screen.Chat },
+            onStart = vm::startPty,
+            onInput = vm::ptyInput,
+            onStop = vm::stopPty,
         )
 
         Screen.Pickers -> PickerScreen(
@@ -723,6 +734,7 @@ private fun ChatScreen(
     onCancelForm: (String) -> Unit,
     onOpenPickers: () -> Unit,
     onShell: () -> Unit,
+    onTerminal: () -> Unit,
     onLoadCommands: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
@@ -767,7 +779,8 @@ private fun ChatScreen(
                 else -> null
             },
             actions = listOf(
-                BarAction(Icons.Outlined.Terminal, "Run a command on the server", onShell),
+                BarAction(Icons.Outlined.PlayArrow, "Run a command on the server", onShell),
+                BarAction(Icons.Outlined.Terminal, "Open the terminal", onTerminal),
                 BarAction(Icons.Outlined.Tune, "Switch model or agent", onOpenPickers),
             ),
             trailing = {
@@ -2257,6 +2270,163 @@ private fun ShellCommandHead(run: ShellRun, busy: Boolean) {
 @Composable
 private fun ShellNote(text: String) {
     Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+// ------------------------------------------------------------------ terminal
+
+/** A program on the server with a real stdin: the command goes over the PTY socket, the output streams back. */
+@Composable
+private fun TerminalScreen(
+    state: ChatState,
+    onBack: () -> Unit,
+    onStart: (String) -> Unit,
+    onInput: (String) -> Unit,
+    onStop: () -> Unit,
+) {
+    // Both fields are local, so they start empty every time the screen opens; the run lives in the view model.
+    var command by remember { mutableStateOf("") }
+    var line by remember { mutableStateOf("") }
+    val run = state.pty
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        TopBar(title = "Terminal", onBack = onBack)
+        state.error?.let { sentence -> ErrorCard(sentence, null) }
+        Column(Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.m)) {
+            TextField(
+                value = command,
+                onValueChange = { command = it },
+                placeholder = {
+                    Text(
+                        "Program to run on the server",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                singleLine = true,
+                shape = RoundedCornerShape(Radius.panel),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    focusedIndicatorColor = Transparent,
+                    unfocusedIndicatorColor = Transparent,
+                    disabledIndicatorColor = Transparent,
+                    cursorColor = AccentFill,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            state.location?.takeIf { it.isNotBlank() }?.let { directory ->
+                Spacer(Modifier.height(Space.xs))
+                Text(
+                    "Runs in $directory",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(Space.s))
+            // The one button carries both states: Start while nothing runs, Stop while it does.
+            if (state.ptyBusy) {
+                PrimaryButton("Stop", onStop, Modifier.fillMaxWidth())
+            } else {
+                PrimaryButton("Start", { onStart(command) }, Modifier.fillMaxWidth(), enabled = command.isNotBlank())
+            }
+        }
+        Hairline()
+        run?.let { current ->
+            TerminalHead(current)
+            Hairline()
+        }
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(Space.l),
+        ) {
+            when {
+                run == null && state.ptyBusy -> ShellNote("Starting the program.")
+                run == null -> ShellNote("No program is running.")
+                run.output.isEmpty() && state.ptyBusy -> ShellNote("The program is running.")
+                run.output.isEmpty() -> ShellNote("The program produced no output.")
+                else -> SelectionContainer {
+                    Text(
+                        run.output,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+        if (run != null) {
+            Hairline()
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .imePadding()
+                    .navigationBarsPadding()
+                    .padding(Space.s),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextField(
+                    value = line,
+                    onValueChange = { line = it },
+                    placeholder = {
+                        Text(
+                            "Send a line to the program",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = Mono, color = MaterialTheme.colorScheme.onSurface),
+                    singleLine = true,
+                    shape = RoundedCornerShape(Radius.panel),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                        focusedIndicatorColor = Transparent,
+                        unfocusedIndicatorColor = Transparent,
+                        disabledIndicatorColor = Transparent,
+                        cursorColor = AccentFill,
+                    ),
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(Space.s))
+                PrimaryButton(
+                    "Send",
+                    onClick = { onInput(line); line = "" },
+                    enabled = state.ptyBusy && line.isNotBlank(),
+                )
+            }
+        }
+    }
+}
+
+/** The program and its outcome: the exit code is the only thing worth reading back. */
+@Composable
+private fun TerminalHead(run: PtyRun) {
+    val (outcome, tone) = when {
+        run.status == "running" -> "running" to MaterialTheme.colorScheme.onSurfaceVariant
+        run.exitCode == 0 -> "exit 0" to MaterialTheme.colorScheme.onSurfaceVariant
+        run.exitCode != null -> "failed · exit ${run.exitCode}" to MaterialTheme.colorScheme.error
+        else -> (run.status ?: "exited") to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SelectionContainer(Modifier.weight(1f)) {
+            Text(
+                "\$ ${run.command}",
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(Space.m))
+        Text(outcome, style = MaterialTheme.typography.labelSmall, color = tone)
+    }
 }
 
 // ------------------------------------------------------------------ pickers
