@@ -72,12 +72,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -623,50 +618,7 @@ private fun Turn(message: Message) {
 private fun AssistantTurn(text: String, streaming: Boolean = false) {
     val blocks = remember(text) { parseBlocks(text) }
     Column {
-        blocks.forEachIndexed { index, block ->
-            when (block) {
-                is Block.Code -> CodeBlock(block)
-                is Block.Heading -> Text(
-                    inline(
-                        block.text,
-                        streaming && index == blocks.lastIndex,
-                    ),
-                    style = when (block.level) {
-                        1 -> MaterialTheme.typography.titleMedium
-                        2 -> MaterialTheme.typography.titleSmall
-                        else -> MaterialTheme.typography.labelLarge
-                    },
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                is Block.Bullet -> Row(Modifier.padding(start = Space.s)) {
-                    Text(
-                        block.marker,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    SelectionContainer {
-                        Text(
-                            inline(
-                                block.text,
-                                streaming && index == blocks.lastIndex,
-                            ),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                }
-                is Block.Paragraph -> {
-                    val caret = streaming && index == blocks.lastIndex
-                    SelectionContainer {
-                        Text(
-                            inline(block.text, caret),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                }
-            }
-        }
+        MarkdownView(blocks, caretOnLast = streaming)
     }
 }
 
@@ -741,118 +693,6 @@ private fun ReasoningBlock(part: Part) {
             )
         }
         Spacer(Modifier.height(Space.xs))
-    }
-}
-
-internal sealed interface Block {
-    data class Paragraph(val text: String) : Block
-    data class Code(val lines: List<String>, val language: String?) : Block
-    data class Heading(val level: Int, val text: String) : Block
-    data class Bullet(val text: String, val marker: String) : Block
-}
-
-/** Fenced code, headings, list items and blank-line paragraphs. */
-internal fun parseBlocks(source: String): List<Block> {
-    val lines = source.lines()
-    val blocks = mutableListOf<Block>()
-    val buffer = mutableListOf<String>()
-    fun flush() {
-        if (buffer.any { it.isNotBlank() }) {
-            blocks += Block.Paragraph(buffer.joinToString("\n").trimEnd())
-        }
-        buffer.clear()
-    }
-    var i = 0
-    while (i < lines.size) {
-        val line = lines[i]
-        if (line.trimStart().startsWith("```")) {
-            flush()
-            val language = line.trimStart().removePrefix("```").trim().ifBlank { null }
-            val code = mutableListOf<String>()
-            i++
-            while (i < lines.size && !lines[i].trimStart().startsWith("```")) {
-                code += lines[i]
-                i++
-            }
-            i++
-            blocks += Block.Code(code, language)
-            continue
-        }
-        val plain = line.trimStart()
-        val heading = Regex("^(#{1,6})\\s+(.+)$").matchEntire(plain)
-        val bullet = Regex("^[-*]\\s+(.+)$").matchEntire(plain)
-        val ordered = Regex("^(\\d{1,3})[.)]\\s+(.+)$").matchEntire(plain)
-        if (heading != null || bullet != null || ordered != null) {
-            flush()
-            when {
-                heading != null -> blocks += Block.Heading(heading.groupValues[1].length, heading.groupValues[2])
-                bullet != null -> blocks += Block.Bullet(bullet.groupValues[1], "• ")
-                ordered != null -> blocks += Block.Bullet(ordered.groupValues[2], ordered.groupValues[1] + ". ")
-            }
-            i++
-            continue
-        }
-        if (line.isBlank() && buffer.isNotEmpty()) {
-            blocks += Block.Paragraph(buffer.joinToString("\n"))
-            buffer.clear()
-            i++
-            continue
-        }
-        buffer += line
-        i++
-    }
-    if (buffer.any { it.isNotBlank() }) blocks += Block.Paragraph(buffer.joinToString("\n").trimEnd())
-    return blocks
-}
-
-/** Inline code, bold and italics; a caret rides at the end while the answer streams. */
-private fun inline(text: String, caret: Boolean) = buildAnnotatedString {
-    var i = 0
-    while (i < text.length) {
-        when {
-            text[i] == '`' && text.indexOf('`', i + 1) > i ->
-                withStyle(SpanStyle(fontFamily = Mono, color = Color(0xFFA8A8AD))) {
-                    append(text.substring(i + 1, text.indexOf('`', i + 1)))
-                }.also { i = text.indexOf('`', i + 1) + 1 }
-            text.startsWith("**", i) && text.indexOf("**", i + 2) > i ->
-                withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
-                    append(text.substring(i + 2, text.indexOf("**", i + 2)))
-                }.also { i = text.indexOf("**", i + 2) + 2 }
-            text[i] == '*' && text.indexOf('*', i + 1) > i ->
-                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                    append(text.substring(i + 1, text.indexOf('*', i + 1)))
-                }.also { i = text.indexOf('*', i + 1) + 1 }
-            else -> {
-                append(text[i])
-                i++
-            }
-        }
-    }
-    if (caret) withStyle(SpanStyle(color = AccentFill)) { append("\u258C") }
-}
-
-@Composable
-private fun CodeBlock(block: Block.Code) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = Space.s)
-            .clip(RoundedCornerShape(Radius.chip))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(Size.hairline, MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.chip))
-            .padding(Space.m),
-    ) {
-        if (block.language != null) {
-            Text(block.language, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
-            Spacer(Modifier.height(Space.xs))
-        }
-        SelectionContainer {
-            Text(
-                block.lines.joinToString("\n"),
-                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
     }
 }
 
