@@ -25,13 +25,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.UrlAnnotation
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 
@@ -159,22 +161,19 @@ internal fun inline(text: String, caret: Boolean): AnnotatedString = buildAnnota
                 withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
                     append(text.substring(i + 2, text.indexOf("**", i + 2)))
                 }.also { i = text.indexOf("**", i + 2) + 2 }
-            // shortcut: UrlAnnotation styling only; scheme-less and relative targets render plain.
+            // shortcut: scheme-less urls become https; relative and anchor targets stay plain text.
             text.startsWith("[", i) && text.startsWith("](", text.indexOf(']', i)) -> {
                 val close = text.indexOf(']', i)
                 val end = text.indexOf(')', close + 2)
                 if (end > close) {
                     val url = text.substring(close + 2, end)
-                    if (url.contains("://")) {
-                        val start = length
-                        withStyle(SpanStyle(color = AccentFill, textDecoration = TextDecoration.Underline)) {
-                            append(text.substring(i + 1, close))
-                        }
-                        addURLAnnotation(UrlAnnotation(url), start, length)
-                    } else {
-                        withStyle(SpanStyle(color = AccentFill)) {
-                            append(text.substring(i + 1, close))
-                        }
+                    withLink(
+                        LinkAnnotation.Url(
+                            if (url.contains("://")) url else "https://$url",
+                            TextLinkStyles(SpanStyle(color = AccentFill)),
+                        ),
+                    ) {
+                        append(text.substring(i + 1, close))
                     }
                     i = end + 1
                 } else {
