@@ -35,10 +35,26 @@ data class Session(
     val model: ModelRef? = null,
     val location: SessionLocation? = null,
     val parentID: String? = null,
+    val cost: Double? = null,
+    val tokens: TokenUsage? = null,
 )
 
 @Serializable
 data class ModelRef(val id: String, val providerID: String, val variant: String? = null)
+
+@Serializable
+data class TokenUsage(
+    val input: Long = 0,
+    val output: Long = 0,
+    val reasoning: Long = 0,
+    val cache: TokenCache = TokenCache(),
+)
+
+@Serializable
+data class TokenCache(val read: Long = 0, val write: Long = 0)
+
+/** What one turn cost the context window, as the TUI counts it. */
+fun TokenUsage.total(): Long = input + output + reasoning + cache.read + cache.write
 
 fun ModelRef.label(): String = "$providerID/$id" + (variant?.let { "#$it" } ?: "")
 
@@ -56,6 +72,9 @@ data class Message(
     val text: String? = null,
     val content: List<Part>? = null,
     val outcome: String? = null,
+    val cost: Double? = null,
+    val tokens: TokenUsage? = null,
+    val model: ModelRef? = null,
 )
 
 @Serializable
@@ -89,14 +108,19 @@ data class PartText(val type: String? = null, val text: String? = null)
 @Serializable
 data class AgentInfo(val id: String, val name: String, val mode: String? = null, val description: String? = null)
 
-// `cost` and `variants` arrive as arrays and `limit` as an object; nothing reads them yet, so they
-// stay out of the model rather than making the whole list undecodable.
+// `cost` and `variants` arrive as arrays and nothing reads them, so they stay out of the model
+// rather than making the whole list undecodable.
 @Serializable
 data class ModelInfo(
     val providerID: String,
     val modelID: String,
     val name: String? = null,
+    val id: String? = null,
+    val limit: ModelLimit? = null,
 )
+
+@Serializable
+data class ModelLimit(val context: Long = 0, val output: Long = 0)
 
 @Serializable
 data class CommandInfo(val name: String, val description: String? = null)

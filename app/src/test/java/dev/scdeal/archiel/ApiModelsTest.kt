@@ -50,6 +50,49 @@ class ApiModelsTest {
     }
 
     @Test
+    fun `an assistant message carries its cost, model and token breakdown`() {
+        val row = """
+            {"id":"msg_1","type":"assistant","cost":0.0423,
+             "tokens":{"input":8100,"output":1200,"reasoning":400,"cache":{"read":2500,"write":500}},
+             "model":{"id":"claude-sonnet-4","providerID":"anthropic","variant":"high"}}
+        """.trimIndent()
+        val message = json.decodeFromString(Message.serializer(), row)
+        assertEquals(0.0423, message.cost ?: 0.0, 0.0001)
+        assertEquals(8100L, message.tokens?.input)
+        assertEquals(1200L, message.tokens?.output)
+        assertEquals(400L, message.tokens?.reasoning)
+        assertEquals(2500L, message.tokens?.cache?.read)
+        assertEquals(500L, message.tokens?.cache?.write)
+        assertEquals(12700L, message.tokens?.total())
+        assertEquals("anthropic", message.model?.providerID)
+        assertEquals("claude-sonnet-4", message.model?.id)
+    }
+
+    @Test
+    fun `a session row carries its running cost and token totals`() {
+        val row = """
+            {"id":"ses_2","title":"Context work","cost":1.25,
+             "tokens":{"input":42000,"output":8000,"reasoning":1500,"cache":{"read":9000,"write":500}}}
+        """.trimIndent()
+        val session = json.decodeFromString(Session.serializer(), row)
+        assertEquals(1.25, session.cost ?: 0.0, 0.0001)
+        assertEquals(42000L, session.tokens?.input)
+        assertEquals(9000L, session.tokens?.cache?.read)
+        assertEquals(61000L, session.tokens?.total())
+    }
+
+    @Test
+    fun `a model row exposes the context window used by the bar`() {
+        val row = """
+            {"id":"claude-sonnet-4","modelID":"claude-sonnet-4-20250514","providerID":"anthropic",
+             "name":"Claude Sonnet 4","limit":{"context":200000,"output":64000,"input":180000}}
+        """.trimIndent()
+        val model = json.decodeFromString(ModelInfo.serializer(), row)
+        assertEquals("claude-sonnet-4", model.id)
+        assertEquals(200000L, model.limit?.context)
+    }
+
+    @Test
     fun `a reasoning part keeps its text and the time it took`() {
         val row = """
             {"id":"prt_1","type":"reasoning",

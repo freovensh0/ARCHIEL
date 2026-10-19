@@ -694,6 +694,7 @@ private fun ChatScreen(
                 )
             },
         )
+        UsageStrip(state.usage, state.context)
         if (state.cutShort) {
             Banner("The stream ended before the answer finished. The text below is all the server sent.")
         }
@@ -800,6 +801,80 @@ private fun ChatScreen(
             },
         )
     }
+}
+
+/**
+ * Session totals and how much of the model's window the last turn left. The bar is only drawn when
+ * the window is known; the numbers and the cost stand alone otherwise.
+ */
+@Composable
+private fun UsageStrip(usage: Usage?, context: ContextUsage?) {
+    if (usage == null && context == null) return
+    val tokens = usage?.tokens
+    val used = context?.used
+    val limit = context?.limit
+    val fraction = if (used != null && limit != null && limit > 0) (used.toFloat() / limit).coerceIn(0f, 1f) else null
+    val nearFull = fraction != null && fraction >= 0.8f
+    val headline = buildList {
+        if (used != null) add("context " + tokenCount(used) + (limit?.let { " / ${tokenCount(it)}" } ?: ""))
+        else if (tokens != null) add("session " + tokenCount(tokens.total()) + " tokens")
+        usage?.let { add(costText(it.cost)) }
+        if (nearFull) add("nearly full")
+    }.joinToString(" · ")
+    Column(Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (fraction != null) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(Radius.pill))
+                        .background(MaterialTheme.colorScheme.outline),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(fraction)
+                            .height(Space.xs)
+                            .background(if (nearFull) MaterialTheme.colorScheme.error else AccentFill),
+                    )
+                }
+                Spacer(Modifier.width(Space.m))
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            Text(
+                headline,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (nearFull) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+        if (tokens != null) {
+            Spacer(Modifier.height(Space.xs))
+            Text(
+                "in ${tokenCount(tokens.input)} · out ${tokenCount(tokens.output)} · think ${tokenCount(tokens.reasoning)} · cache ${tokenCount(tokens.cache.read + tokens.cache.write)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+    }
+    Hairline()
+}
+
+private fun tokenCount(count: Long): String {
+    val (value, suffix) = when {
+        count >= 1_000_000 -> count / 1_000_000.0 to "M"
+        count >= 1_000 -> count / 1_000.0 to "k"
+        else -> return count.toString()
+    }
+    return String.format(Locale.US, "%.1f", value).removeSuffix(".0") + suffix
+}
+
+/** Never "$NaN" or "$-": a missing or odd cost reads as zero. */
+private fun costText(cost: Double): String {
+    val value = if (cost.isFinite() && cost > 0.0) cost else 0.0
+    val text = if (value > 0.0 && value < 0.01) String.format(Locale.US, "%.4f", value) else String.format(Locale.US, "%.2f", value)
+    return "\$$text"
 }
 
 /** Rename and fork ride the builtin slash path; delete confirms before it drops the session. */
@@ -1660,6 +1735,14 @@ private fun PickerScreen(
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopBar(title = "Model and agent", onBack = onBack)
+        state.usage?.let { usage ->
+            Text(
+                "This session · ${tokenCount(usage.tokens.total())} tokens · ${costText(usage.cost)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s),
+            )
+        }
         TextField(
             value = query,
             onValueChange = { query = it },

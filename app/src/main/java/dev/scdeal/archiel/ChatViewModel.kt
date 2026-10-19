@@ -1,7 +1,6 @@
 package dev.scdeal.archiel
 
 import android.app.Application
-import android.content.Context
 import android.net.Uri
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
@@ -25,6 +24,12 @@ import kotlinx.serialization.json.contentOrNull
 import java.io.File
 import java.io.IOException
 import kotlin.math.min
+
+/** The session totals: live from `session.usage.updated`, seeded from the session list on open. */
+data class Usage(val tokens: TokenUsage, val cost: Double)
+
+/** The open session's context fill; the limit is null until the model that ran the last turn is known. */
+data class ContextUsage(val used: Long, val limit: Long?)
 
 data class ChatState(    val sessions: List<Session> = emptyList(),
     val commands: List<CommandInfo> = emptyList(),
@@ -56,6 +61,8 @@ data class ChatState(    val sessions: List<Session> = emptyList(),
     val draft: String = "",
     /** The exported session file to hand to the share sheet; cleared once the chooser is shown. */
     val shareUri: Uri? = null,
+    val usage: Usage? = null,
+    val context: ContextUsage? = null,
     val error: String? = null,
 )
 
@@ -87,7 +94,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val address = cfg.baseUrl
 
     /** Drafts sit on disk, keyed by session id, so a killed process does not lose what you typed. */
-    private val drafts = app.getSharedPreferences("drafts", Context.MODE_PRIVATE)
+    private val drafts = app.getSharedPreferences("drafts", android.content.Context.MODE_PRIVATE)
 
     // Event payloads carry the same shapes as the API responses; decode them with the same tolerance.
     private val json = Json { ignoreUnknownKeys = true }
@@ -149,7 +156,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.agents.isNotEmpty()) return
         viewModelScope.launch {
             runCatching { client.agents() to client.models() }
-                .onSuccess { (agents, models) -> _state.update { it.copy(agents = agents, models = models) } }
+                .onSuccess { (agents, models) ->
+                    // The context limit needs the model list; the transcript may have landed first.
+                    _state.update { it.copy(agents = agents, models = models, context = contextOf(it.messages, models)) }
+                }
                 .onFailure { e -> fail("Could not load agents and models: ${e.message}") }
         }
     }
@@ -195,6 +205,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val requestID = data.str("requestID")
                 _state.update { it.copy(permissions = it.permissions.filterNot { p -> p.id == requestID }) }
                 pollPrompts()
+            }
+            // Ephemeral, but it is the only live source of the session totals.
+            type == "session.usage.updated" -> {
+                val tokens = (data["tokens"] as? JsonObject)
+                    ?.let { runCatching { json.decodeFromJsonElement(TokenUsage.serializer(), it) }.getOrNull() }
+                if (tokens != null) {
+                    val cost = (data["cost"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull() ?: 0.0
+                    _state.update { it.copy(usage = Usage(tokens, cost)) }
+                }
             }
             type == "session.execution.started" -> {
                 // A run for the prompt has begun, so the server has it even before the reload.
@@ -353,6 +372,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     online = true,
                     latencyMs = System.currentTimeMillis() - started,
                     serverVersion = info.version,
+                    // Seed only: a usage event that already arrived is fresher than the list.
+                    usage = it.usage ?: usageOf(list.firstOrNull { s -> s.id == it.sessionId }),
                     error = null,
                 )
             }
@@ -404,9 +425,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 tools = emptyList(),
                 cutShort = false,
                 draft = drafts.getString(id, "").orEmpty(),
+                usage = usageOf(existing),
+                context = null,
                 error = null,
             )
         }
+        // The context bar needs the model windows; loadPickers caches, so this is free afterwards.
+        loadPickers()
         loadMessages()
         // A question asked while the screen was closed has no live event left to replay.
         pollPrompts()
@@ -414,7 +439,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun close() {
         _state.update {
-            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", shareUri = null)
+            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", shareUri = null, usage = null, context = null)
         }
     }
 
@@ -526,7 +551,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { client.messages(id) }
                 .onSuccess { msgs ->
-                    _state.update { it.copy(messages = msgs, online = true) }
+                    _state.update { it.copy(messages = msgs, online = true, context = contextOf(msgs, it.models)) }
                     msgs.lastOrNull()?.let { last ->
                         _state.update { it.copy(previews = it.previews + (id to last.preview())) }
                     }
@@ -536,5 +561,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     fail("Could not load the messages: ${e.message}") { loadMessages() }
                 }
         }
+    }
+
+    /** The TUI's rule: the last assistant message with usage sets the fill, matched to its model's window. */
+    private fun contextOf(messages: List<Message>, models: List<ModelInfo>): ContextUsage? {
+        val message = messages.lastOrNull { it.tokens != null } ?: return null
+        val tokens = message.tokens ?: return null
+        val ref = message.model
+        val limit = ref?.let { r ->
+            models.firstOrNull { it.providerID == r.providerID && (it.id == r.id || it.modelID == r.id) }
+                ?.limit?.context
+        }?.takeIf { it > 0 }
+        return ContextUsage(tokens.total(), limit)
+    }
+
+    /** The session list row carries the same totals, so an opened session has numbers before any event. */
+    private fun usageOf(session: Session?): Usage? {
+        val s = session ?: return null
+        if (s.tokens == null && s.cost == null) return null
+        return Usage(s.tokens ?: TokenUsage(), s.cost ?: 0.0)
     }
 }
