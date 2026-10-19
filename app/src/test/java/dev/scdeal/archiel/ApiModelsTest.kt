@@ -67,6 +67,37 @@ class ApiModelsTest {
     }
 
     @Test
+    fun `a question form decodes its fields, types and options`() {
+        val row = """
+            {"id":"frm_1","sessionID":"ses_1","title":"Build settings","metadata":{"origin":"question"},
+             "fields":[
+               {"key":"q0","title":"Where should it live?","description":"Pick one target.",
+                "type":"string","options":[{"value":"local","label":"Local"},{"value":"remote","label":"Remote"}],
+                "custom":false,"required":true},
+               {"key":"q1","title":"Which formats?","type":"multiselect",
+                "options":[{"value":"md","label":"Markdown","description":"Plain text"},
+                           {"value":"html","label":"HTML"}],"custom":true}
+             ]}
+        """.trimIndent()
+        val form = json.decodeFromString(FormInfo.serializer(), row)
+        assertEquals("frm_1", form.id)
+        assertEquals("ses_1", form.sessionID)
+        assertEquals("Build settings", form.title)
+        assertEquals(2, form.fields.size)
+        val single = form.fields[0]
+        assertEquals("q0", single.key)
+        assertEquals("Where should it live?", single.title)
+        assertEquals("string", single.type)
+        assertEquals(true, single.required)
+        assertEquals(listOf("Local", "Remote"), single.options.map { it.label })
+        val multi = form.fields[1]
+        assertEquals("multiselect", multi.type)
+        assertEquals(true, multi.custom)
+        assertEquals("HTML", multi.options[1].label)
+        assertEquals("Plain text", multi.options[0].description)
+    }
+
+    @Test
     fun `a patch tool part keeps its files metadata`() {
         val row = """
             {"type":"tool","id":"call-patch","name":"patch",

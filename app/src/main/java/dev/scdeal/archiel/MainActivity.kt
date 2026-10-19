@@ -89,7 +89,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -138,6 +140,8 @@ private fun App() {
             onStop = vm::stop,
             onRunCommand = vm::runCommand,
             onReplyPermission = vm::replyPermission,
+            onReplyForm = vm::replyForm,
+            onCancelForm = vm::cancelForm,
             onOpenPickers = { vm.loadPickers(); screen = Screen.Pickers },
             onLoadCommands = vm::loadCommands,
         )
@@ -450,6 +454,8 @@ private fun ChatScreen(
     onStop: () -> Unit,
     onRunCommand: (String, String) -> Unit,
     onReplyPermission: (String, String) -> Unit,
+    onReplyForm: (String, JsonObject) -> Unit,
+    onCancelForm: (String) -> Unit,
     onOpenPickers: () -> Unit,
     onLoadCommands: () -> Unit,
 ) {
@@ -493,8 +499,19 @@ private fun ChatScreen(
             }
         }
         state.error?.let { sentence -> ErrorCard(sentence, onRetry) }
-        state.permissions.firstOrNull()?.let { request ->
-            PermissionCard(request, onReply = { decision -> onReplyPermission(request.id, decision) })
+        // Prompts keep the server order; the run waits on each one.
+        // shortcut: they stack without their own scroll, which fits the usual one-or-two asks on a phone.
+        Column(Modifier.fillMaxWidth()) {
+            state.permissions.forEach { request ->
+                PermissionCard(request, onReply = { decision -> onReplyPermission(request.id, decision) })
+            }
+            state.forms.forEach { form ->
+                FormCard(
+                    form = form,
+                    onSubmit = { answer -> onReplyForm(form.id, answer) },
+                    onDismiss = { onCancelForm(form.id) },
+                )
+            }
         }
         Dock(
             input = input,
@@ -584,22 +601,178 @@ private fun PermissionCard(request: PermissionRequest, onReply: (String) -> Unit
 }
 
 @Composable
-private fun Choice(label: String, decision: String, primary: Boolean, onReply: (String) -> Unit) {
+private fun Choice(label: String, decision: String, primary: Boolean, onReply: (String) -> Unit, enabled: Boolean = true) {
+    val fill = when {
+        !enabled -> MaterialTheme.colorScheme.surface
+        primary -> AccentFill
+        else -> MaterialTheme.colorScheme.background
+    }
+    val ink = when {
+        !enabled -> MaterialTheme.colorScheme.outline
+        primary -> OnAccent
+        else -> MaterialTheme.colorScheme.onSurface
+    }
     Box(
         Modifier
             .heightIn(min = Size.hitSmall)
             .clip(RoundedCornerShape(Radius.control))
-            .background(if (primary) AccentFill else MaterialTheme.colorScheme.background)
-            .border(Size.hairline, if (primary) AccentFill else MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.control))
-            .clickable { onReply(decision) }
+            .background(fill)
+            .border(Size.hairline, if (primary && enabled) AccentFill else MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.control))
+            .clickable(enabled = enabled) { onReply(decision) }
             .padding(horizontal = Space.m, vertical = Space.s),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (primary) OnAccent else MaterialTheme.colorScheme.onSurface,
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = ink)
+    }
+}
+
+/** What one form field holds: the chosen labels and, when the field allows it, a typed answer. */
+private data class FormAnswer(val selected: Set<String> = emptySet(), val text: String = "")
+
+@Composable
+private fun FormCard(form: FormInfo, onSubmit: (JsonObject) -> Unit, onDismiss: () -> Unit) {
+    var answers by remember(form.id) { mutableStateOf<Map<String, FormAnswer>>(emptyMap()) }
+    val complete = form.fields.filter { it.required }.all { field ->
+        val answer = answers[field.key] ?: FormAnswer()
+        answer.text.isNotBlank() || answer.selected.isNotEmpty()
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(Space.m)
+            .clip(RoundedCornerShape(Radius.control))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(Size.hairline, AccentFill, RoundedCornerShape(Radius.control))
+            .padding(Space.m),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            LiveDot(AccentFill)
+            Spacer(Modifier.width(Space.s))
+            Text(
+                form.title?.takeIf { it.isNotBlank() } ?: "Question",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        form.fields.forEach { field ->
+            FormFieldControl(field, answers[field.key] ?: FormAnswer()) { next ->
+                answers = answers + (field.key to next)
+            }
+        }
+        Spacer(Modifier.height(Space.m))
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+            Choice("Submit", "submit", true, onReply = { onSubmit(formAnswer(form, answers)) }, enabled = complete)
+            Choice("Dismiss", "dismiss", false, onReply = { onDismiss() })
+        }
+    }
+}
+
+@Composable
+private fun FormFieldControl(field: FormField, answer: FormAnswer, onChange: (FormAnswer) -> Unit) {
+    Spacer(Modifier.height(Space.m))
+    field.title?.takeIf { it.isNotBlank() }?.let {
+        Text(it, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+    }
+    field.description?.takeIf { it.isNotBlank() }?.let {
+        Spacer(Modifier.height(Space.xs))
+        Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    if (field.options.isNotEmpty()) {
+        Spacer(Modifier.height(Space.s))
+        field.options.forEach { option ->
+            val selected = option.label in answer.selected
+            FormOptionRow(option, selected) {
+                // Single choice replaces the pick; a multiselect toggles and keeps a typed answer.
+                onChange(
+                    if (field.type == "multiselect") {
+                        answer.copy(selected = if (selected) answer.selected - option.label else answer.selected + option.label)
+                    } else {
+                        FormAnswer(selected = setOf(option.label))
+                    },
+                )
+            }
+            Spacer(Modifier.height(Space.xs))
+        }
+    }
+    if (field.options.isEmpty() || field.custom) {
+        Spacer(Modifier.height(Space.s))
+        FormTextField(
+            value = answer.text,
+            placeholder = if (field.options.isEmpty()) "Type an answer" else "Or type your own",
+            onValue = { text -> onChange(if (field.type == "multiselect") answer.copy(text = text) else FormAnswer(text = text)) },
         )
+    }
+}
+
+@Composable
+private fun FormOptionRow(option: FormOption, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = Size.hitSmall)
+            .clip(RoundedCornerShape(Radius.chip))
+            .background(MaterialTheme.colorScheme.background)
+            .border(
+                Size.hairline,
+                if (selected) AccentFill else MaterialTheme.colorScheme.outline,
+                RoundedCornerShape(Radius.chip),
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = Space.m, vertical = Space.s),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        LiveDot(if (selected) AccentFill else MaterialTheme.colorScheme.outline)
+        Spacer(Modifier.width(Space.s))
+        Column(Modifier.weight(1f)) {
+            Text(
+                option.label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (selected) AccentFill else MaterialTheme.colorScheme.onSurface,
+            )
+            option.description?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun FormTextField(value: String, placeholder: String, onValue: (String) -> Unit) {
+    TextField(
+        value = value,
+        onValueChange = onValue,
+        placeholder = {
+            Text(
+                placeholder,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+        shape = RoundedCornerShape(Radius.chip),
+        maxLines = 3,
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = MaterialTheme.colorScheme.surface,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+            focusedIndicatorColor = Transparent,
+            unfocusedIndicatorColor = Transparent,
+            disabledIndicatorColor = Transparent,
+            cursorColor = AccentFill,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+/** Question answers are labels, not option values, and a multiselect is always an array. */
+private fun formAnswer(form: FormInfo, answers: Map<String, FormAnswer>): JsonObject = buildJsonObject {
+    form.fields.forEach { field ->
+        val answer = answers[field.key] ?: FormAnswer()
+        if (field.type == "multiselect") {
+            val labels = answer.selected.toList() + answer.text.trim().takeIf { it.isNotEmpty() }.orEmpty()
+            put(field.key, JsonArray(labels.map { JsonPrimitive(it) }))
+        } else {
+            put(field.key, JsonPrimitive(answer.text.trim().takeIf { it.isNotEmpty() } ?: answer.selected.firstOrNull().orEmpty()))
+        }
     }
 }
 

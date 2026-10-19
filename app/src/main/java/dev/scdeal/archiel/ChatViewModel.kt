@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -22,6 +23,7 @@ data class ChatState(    val sessions: List<Session> = emptyList(),
     val agents: List<AgentInfo> = emptyList(),
     val models: List<ModelInfo> = emptyList(),
     val permissions: List<PermissionRequest> = emptyList(),
+    val forms: List<FormInfo> = emptyList(),
     val model: String? = null,
     val agent: String? = null,
     val previews: Map<String, String> = emptyMap(),
@@ -57,6 +59,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val cfg = Cfg.load(app)
     private val client = OpenCodeClient(cfg.baseUrl, cfg.password)
     val address = cfg.baseUrl
+
+    // Event payloads carry the same shapes as the API responses; decode them with the same tolerance.
+    private val json = Json { ignoreUnknownKeys = true }
 
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -119,7 +124,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private fun handleEvent(e: JsonObject) {
         val type = e.str("type") ?: return
         val data = e["data"] as? JsonObject ?: return
-        if (data.str("sessionID") != _state.value.sessionId) return
+        // form.created carries the session on the form, not next to it.
+        val sessionID = data.str("sessionID") ?: (data["form"] as? JsonObject)?.str("sessionID")
+        if (sessionID != _state.value.sessionId) return
         when {
             type == "session.text.delta" ->
                 _state.update { it.copy(busy = true, stream = it.stream + data.str("delta").orEmpty()) }
@@ -135,10 +142,31 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 upsertTool(data.str("id")) { it.copy(state = (it.state ?: PartState()).copy(status = "completed", content = toolOutput(data), metadata = data["metadata"] as? JsonObject)) }
             type == "session.tool.failed" ->
                 upsertTool(data.str("id")) { it.copy(state = (it.state ?: PartState()).copy(status = "error", content = toolOutput(data), metadata = data["metadata"] as? JsonObject)) }
+            type == "form.created" -> {
+                val form = (data["form"] as? JsonObject)
+                    ?.let { runCatching { json.decodeFromJsonElement(FormInfo.serializer(), it) }.getOrNull() }
+                if (form != null) {
+                    _state.update { s ->
+                        s.copy(
+                            forms = if (s.forms.any { it.id == form.id }) s.forms.map { if (it.id == form.id) form else it }
+                            else s.forms + form,
+                        )
+                    }
+                }
+            }
+            type == "form.replied" || type == "form.cancelled" ->
+                data.str("id")?.let { id -> _state.update { it.copy(forms = it.forms.filterNot { f -> f.id == id }) } }
+            // The feed names these too, but polling keeps the list honest across a dropped stream.
+            type == "permission.asked" -> pollPrompts()
+            type == "permission.replied" -> {
+                val requestID = data.str("requestID")
+                _state.update { it.copy(permissions = it.permissions.filterNot { p -> p.id == requestID }) }
+                pollPrompts()
+            }
             type == "session.execution.started" -> {
                 // A run for the prompt has begun, so the server has it even before the reload.
                 _state.update { it.copy(busy = true, cutShort = false, tools = emptyList(), queuedId = null) }
-                pollPermissions()
+                pollPrompts()
             }
             type == "session.execution.succeeded" -> {
                 _state.update { it.copy(busy = false, stream = "", thinking = "", tools = emptyList()) }
@@ -169,11 +197,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     /** The event feed does not name permission updates, so a run in flight polls them. */
-    private fun pollPermissions() {
+    private fun pollPrompts() {
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
             runCatching { client.permissions(id) }
                 .onSuccess { list -> _state.update { it.copy(permissions = list) } }
+            runCatching { client.forms(id) }
+                .onSuccess { list -> _state.update { it.copy(forms = list) } }
         }
     }
 
@@ -183,7 +213,27 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { client.replyPermission(id, requestID, decision) }
                 .onSuccess { _state.update { it.copy(permissions = it.permissions.filterNot { p -> p.id == requestID }) } }
                 .onFailure { e -> fail("Could not answer the permission request: ${e.message}") }
-            pollPermissions()
+            pollPrompts()
+        }
+    }
+
+    fun replyForm(formID: String, answer: JsonObject) {
+        val id = _state.value.sessionId ?: return
+        viewModelScope.launch {
+            runCatching { client.replyForm(id, formID, answer) }
+                .onSuccess { _state.update { it.copy(forms = it.forms.filterNot { f -> f.id == formID }) } }
+                // A 400 means the server rejected the choice; Retry would only resend the same answer.
+                .onFailure { e -> fail("The server rejected the answer: ${e.message} Pick an option the form offers and submit again.") }
+            pollPrompts()
+        }
+    }
+
+    fun cancelForm(formID: String) {
+        val id = _state.value.sessionId ?: return
+        viewModelScope.launch {
+            runCatching { client.cancelForm(id, formID) }
+                .onSuccess { _state.update { it.copy(forms = it.forms.filterNot { f -> f.id == formID }) } }
+                .onFailure { e -> fail("Could not dismiss the form: ${e.message}") }
         }
     }
 
@@ -214,7 +264,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             _state.update { it.copy(busy = true, cutShort = false, thinking = "", tools = emptyList(), error = null) }
             runCatching { client.runCommand(id, name, arguments) }
-                .onSuccess { pollPermissions() }
+                .onSuccess { pollPrompts() }
                 .onFailure { e ->
                     _state.update { it.copy(busy = false) }
                     fail("Could not run /$name: ${e.message}") { runCommand(name, arguments) }
@@ -289,6 +339,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 location = existing?.location?.directory,
                 commands = emptyList(),
                 permissions = emptyList(),
+                forms = emptyList(),
                 title = it.sessions.firstOrNull { s -> s.id == id }?.title,
                 messages = emptyList(),
                 queuedId = null,
@@ -300,11 +351,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         loadMessages()
+        // A question asked while the screen was closed has no live event left to replay.
+        pollPrompts()
     }
 
     fun close() {
         _state.update {
-            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList())
+            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList())
         }
     }
 

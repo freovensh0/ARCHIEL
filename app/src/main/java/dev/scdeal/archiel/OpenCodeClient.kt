@@ -110,6 +110,32 @@ data class PermissionRequest(
     val message: String? = null,
 )
 
+/**
+ * A pending server form — the `question` tool asks through one. Only the fields the app renders are
+ * modelled; the server's other field types arrive as a `type` we do not special-case.
+ */
+@Serializable
+data class FormInfo(
+    val id: String,
+    val sessionID: String? = null,
+    val title: String? = null,
+    val fields: List<FormField> = emptyList(),
+)
+
+@Serializable
+data class FormField(
+    val key: String,
+    val title: String? = null,
+    val description: String? = null,
+    val type: String? = null,
+    val required: Boolean = false,
+    val custom: Boolean = false,
+    val options: List<FormOption> = emptyList(),
+)
+
+@Serializable
+data class FormOption(val value: String, val label: String, val description: String? = null)
+
 @Serializable
 data class ServerInfo(val version: String? = null, val pid: Int? = null, val urls: List<String> = emptyList())
 
@@ -193,6 +219,23 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
             "/api/session/$sessionID/permission/$requestID/reply",
             buildJsonObject { put("decision", decision) }.toString(),
         )
+    }
+
+    /** Pending forms only: a form leaves this list once it is answered or dismissed. */
+    suspend fun forms(sessionID: String): List<FormInfo> =
+        json.decodeFromString(Data.serializer(FormInfo.serializer()), call("GET", "/api/session/$sessionID/form")).data
+
+    /** `answer` keys are field keys; single choice and text send a string, multiselect an array. */
+    suspend fun replyForm(sessionID: String, formID: String, answer: JsonObject) {
+        call(
+            "POST",
+            "/api/session/$sessionID/form/$formID/reply",
+            buildJsonObject { put("answer", answer) }.toString(),
+        )
+    }
+
+    suspend fun cancelForm(sessionID: String, formID: String) {
+        call("DELETE", "/api/session/$sessionID/form/$formID")
     }
 
     suspend fun setModel(sessionID: String, providerID: String, modelID: String) {
