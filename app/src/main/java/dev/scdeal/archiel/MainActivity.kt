@@ -520,7 +520,7 @@ private fun ChildSessionRow(title: String, agent: String?, stamp: String) {
         Modifier
             .fillMaxWidth()
             .heightIn(min = Size.row)
-            .padding(start = Space.xl, end = Space.l, vertical = Space.m),
+            .padding(start = Space.xl, top = Space.m, end = Space.l, bottom = Space.m),
         verticalAlignment = Alignment.Top,
     ) {
         Column(Modifier.weight(1f)) {
