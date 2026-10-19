@@ -88,6 +88,15 @@ data class Message(
     val cost: Double? = null,
     val tokens: TokenUsage? = null,
     val model: ModelRef? = null,
+    /** The files a user message carried; `data` is base64 and the server may have resized an image. */
+    val files: List<MessageFile>? = null,
+)
+
+@Serializable
+data class MessageFile(
+    val data: String? = null,
+    val mime: String? = null,
+    val name: String? = null,
 )
 
 @Serializable

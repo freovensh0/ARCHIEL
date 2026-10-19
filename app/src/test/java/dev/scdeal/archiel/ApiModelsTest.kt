@@ -239,6 +239,23 @@ class ApiModelsTest {
     }
 
     @Test
+    fun `a user message carries the files sent with the prompt`() {
+        val row = """
+            {"id":"msg_2","type":"user","text":"Look at this",
+             "files":[{"data":"AAAA","mime":"image/png","source":"prompt","name":"shot.png"}]}
+        """.trimIndent()
+        val message = json.decodeFromString(Message.serializer(), row)
+        assertEquals("Look at this", message.text)
+        assertEquals(1, message.files?.size)
+        assertEquals("AAAA", message.files?.first()?.data)
+        assertEquals("image/png", message.files?.first()?.mime)
+        assertEquals("shot.png", message.files?.first()?.name)
+        // An older server sends no files at all, so the field stays null rather than empty.
+        val bare = json.decodeFromString(Message.serializer(), """{"id":"m","type":"user"}""")
+        assertEquals(null, bare.files)
+    }
+
+    @Test
     fun `a model label parses back into a ref, with an optional variant`() {
         val plain = modelRefOf("anthropic/claude-sonnet-4")
         assertEquals("anthropic", plain?.providerID)

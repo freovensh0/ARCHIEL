@@ -3,8 +3,11 @@ package dev.scdeal.archiel
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.util.Base64
+import android.util.LruCache
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -19,10 +22,14 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +38,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -61,6 +69,7 @@ import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
@@ -85,6 +94,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -92,20 +102,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -1225,6 +1245,7 @@ private fun formAnswer(form: FormInfo, answers: Map<String, FormAnswer>): JsonOb
 @Composable
 private fun Turn(message: Message, queued: Boolean = false) {
     if (message.type == "user") {
+        var viewing by remember { mutableStateOf<MessageFile?>(null) }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s),
             horizontalArrangement = Arrangement.End,
@@ -1242,6 +1263,10 @@ private fun Turn(message: Message, queued: Boolean = false) {
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
+                    message.files.orEmpty().forEach { file ->
+                        Spacer(Modifier.height(Space.s))
+                        MessageFileView(file) { viewing = file }
+                    }
                     if (queued) {
                         Spacer(Modifier.height(Space.xs))
                         Text(
@@ -1253,6 +1278,7 @@ private fun Turn(message: Message, queued: Boolean = false) {
                 }
             }
         }
+        viewing?.let { file -> ImageViewer(file) { viewing = null } }
         return
     }
     val parts = message.content.orEmpty()
@@ -1285,6 +1311,179 @@ private fun AssistantTurn(text: String, streaming: Boolean = false) {
     val blocks = remember(text) { parseBlocks(text) }
     Column {
         MarkdownView(blocks, caretOnLast = streaming)
+    }
+}
+
+// ------------------------------------------------------------------ attachments
+
+private const val THUMB_MAX_PX = 2048
+private const val VIEWER_MAX_PX = 4096
+private val ThumbWidth = 200.dp
+private val ThumbMaxHeight = 200.dp
+
+/** Key is (max side, base64), so a thumbnail and the viewer's copy coexist without re-decoding. */
+private val attachmentCache = object : LruCache<Pair<Int, String>, ImageBitmap>(24 * 1024 * 1024) {
+    override fun sizeOf(key: Pair<Int, String>, value: ImageBitmap): Int = value.byteCount
+}
+
+/**
+ * A photo arrives as base64 and can be tens of megabytes, so the decode stays off the main thread and
+ * `inSampleSize` bounds the bitmap to the longest side the caller asked for.
+ */
+private fun decodeAttachment(data: String, maxPx: Int): ImageBitmap? = runCatching {
+    val bytes = Base64.decode(data, Base64.DEFAULT)
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    val longest = maxOf(bounds.outWidth, bounds.outHeight)
+    var sample = 1
+    while (longest / sample > maxPx) sample *= 2
+    val options = BitmapFactory.Options().apply { inSampleSize = sample }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
+}.getOrNull()
+
+@Composable
+private fun rememberAttachment(data: String, maxPx: Int): ImageBitmap? {
+    val key = remember(data, maxPx) { maxPx to data }
+    return produceState(initialValue = attachmentCache.get(key), key1 = key) {
+        if (value == null) {
+            val decoded = withContext(Dispatchers.Default) { decodeAttachment(data, maxPx) }
+            if (decoded != null) attachmentCache.put(key, decoded)
+            value = decoded
+        }
+    }.value
+}
+
+/** A file under a user message: an image is a tappable thumbnail, anything else a name-and-type card. */
+@Composable
+private fun MessageFileView(file: MessageFile, onOpen: () -> Unit) {
+    val data = file.data
+    if (data != null && file.mime?.startsWith("image/") == true) {
+        val bitmap = rememberAttachment(data, THUMB_MAX_PX)
+        if (bitmap != null) {
+            val ratio = bitmap.height.toFloat() / bitmap.width
+            Box(
+                Modifier
+                    .width(ThumbWidth)
+                    .height((ThumbWidth * ratio).coerceAtMost(ThumbMaxHeight))
+                    .clip(RoundedCornerShape(Radius.chip))
+                    .clickable(onClick = onOpen),
+            ) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = file.name ?: "Attached image",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            return
+        }
+    }
+    // Unknown type, missing data or a failed decode: the name still says which file it was.
+    FileCard(file)
+}
+
+@Composable
+private fun FileCard(file: MessageFile) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(Radius.chip))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(Size.hairline, MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.chip))
+            .padding(horizontal = Space.m, vertical = Space.s),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.InsertDriveFile,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(Space.s))
+        Column {
+            Text(
+                file.name ?: "Attached file",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            file.mime?.takeIf { it.isNotBlank() }?.let { mime ->
+                Text(
+                    mime,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImageViewer(file: MessageFile, onClose: () -> Unit) {
+    val bitmap = rememberAttachment(file.data.orEmpty(), VIEWER_MAX_PX)
+    var scale by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    val backdrop = remember { MutableInteractionSource() }
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(
+            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
+            contentAlignment = Alignment.Center,
+        ) {
+            // A full-size layer behind the image turns a tap on the empty area into a close.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable(interactionSource = backdrop, indication = null, onClick = onClose),
+            )
+            bitmap?.let { image ->
+                Image(
+                    bitmap = image,
+                    contentDescription = file.name ?: "Attached image",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        // Sized to the bitmap's aspect so the untouched area stays background and clickable.
+                        .aspectRatio(image.width.toFloat() / image.height.coerceAtLeast(1))
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoom, _ ->
+                                scale = (scale * zoom).coerceIn(1f, 6f)
+                                offset = if (scale > 1f) offset + pan else Offset.Zero
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures(onDoubleTap = {
+                                scale = 1f
+                                offset = Offset.Zero
+                            })
+                        }
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offset.x,
+                            translationY = offset.y,
+                        ),
+                )
+            }
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(Space.m)
+                    .size(Size.hit)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .clickable(onClick = onClose),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Outlined.Close,
+                    "Close the image",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
     }
 }
 
