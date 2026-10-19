@@ -317,6 +317,10 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
         call("DELETE", "/api/session/$sessionID")
     }
 
+    /** The server's portable JSON bundle, handed to the share sheet unread so it can be imported again. */
+    suspend fun exportSession(sessionID: String): String =
+        call("GET", "/api/experimental/session/$sessionID/export")
+
     /** The server re-reads its config; used after the user edits one outside the app. */
     suspend fun reloadConfig() {
         call("POST", "/api/location/reload", "{}")

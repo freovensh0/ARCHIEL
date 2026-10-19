@@ -2,9 +2,12 @@ package dev.scdeal.archiel
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,11 +16,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import java.io.File
 import java.io.IOException
 import kotlin.math.min
 
@@ -49,6 +54,8 @@ data class ChatState(    val sessions: List<Session> = emptyList(),
     val search: String = "",
     /** The unsent input of the open session; persisted to disk so it survives process death. */
     val draft: String = "",
+    /** The exported session file to hand to the share sheet; cleared once the chooser is shown. */
+    val shareUri: Uri? = null,
     val error: String? = null,
 )
 
@@ -63,6 +70,16 @@ val builtins = listOf(
     CommandInfo("rename", "Retitle this session; anything after /rename is the title"),
     CommandInfo("reload", "Reload the server configuration after you edit it"),
 )
+
+/** A file name from the session title: lowercase letters, digits and dashes only, capped at 40. */
+private fun sessionSlug(title: String?, fallback: String): String =
+    title.orEmpty().lowercase()
+        .map { if (it in 'a'..'z' || it in '0'..'9' || it == '-') it else '-' }
+        .joinToString("")
+        .replace(Regex("-+"), "-")
+        .trim('-')
+        .take(40)
+        .ifEmpty { fallback }
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val cfg = Cfg.load(app)
@@ -397,7 +414,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun close() {
         _state.update {
-            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "")
+            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", shareUri = null)
         }
     }
 
@@ -421,6 +438,29 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             .onFailure { e -> fail("Could not delete the session: ${e.message}") }
     }
+
+    /**
+     * The server writes the portable bundle; the app only parks it in the cache and points the share
+     * sheet at it. A later export overwrites the same file, so the cache does not grow per tap.
+     */
+    fun exportSession() = viewModelScope.launch {
+        val id = _state.value.sessionId ?: return@launch
+        runCatching {
+            val body = client.exportSession(id)
+            // The bundle can be megabytes; keep the write off the main thread.
+            withContext(Dispatchers.IO) {
+                val dir = File(getApplication<Application>().cacheDir, "exports").apply { mkdirs() }
+                val file = File(dir, "${sessionSlug(_state.value.title, id)}.json")
+                file.writeText(body)
+                val app = getApplication<Application>()
+                FileProvider.getUriForFile(app, "${app.packageName}.files", file)
+            }
+        }
+            .onSuccess { uri -> _state.update { it.copy(shareUri = uri) } }
+            .onFailure { e -> fail("Could not export the session: ${e.message}") }
+    }
+
+    fun clearShare() = _state.update { it.copy(shareUri = null) }
 
     /** Persists every keystroke; the strings are tiny and `apply()` writes off the main thread. */
     fun draft(text: String) {

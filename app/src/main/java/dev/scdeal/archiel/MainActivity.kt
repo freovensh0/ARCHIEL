@@ -2,6 +2,7 @@ package dev.scdeal.archiel
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -158,6 +159,8 @@ private fun App() {
             onLoadCommands = vm::loadCommands,
             onRename = { vm.runCommand("rename", it) },
             onDelete = { vm.deleteSession { vm.close(); screen = Screen.Sessions } },
+            onExport = vm::exportSession,
+            onShareDone = vm::clearShare,
         )
 
         Screen.Pickers -> PickerScreen(
@@ -643,14 +646,30 @@ private fun ChatScreen(
     onLoadCommands: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
+    onExport: () -> Unit,
+    onShareDone: () -> Unit,
 ) {
     val list = rememberLazyListState()
+    val context = LocalContext.current
     var renaming by remember { mutableStateOf(false) }
     var confirmingDelete by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.messages.size, state.stream.length, state.thinking.length) {
         val count = list.layoutInfo.totalItemsCount
         if (count > 0) list.animateScrollToItem(count - 1)
+    }
+
+    // The view model only holds the file; clearing it as soon as the chooser opens is what keeps a
+    // cancelled sheet from opening twice.
+    LaunchedEffect(state.shareUri) {
+        val uri = state.shareUri ?: return@LaunchedEffect
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "application/json"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(send, "Share session"))
+        onShareDone()
     }
 
     // Commands are per directory and the server registers plugins late, so ask again when the dock
@@ -670,6 +689,7 @@ private fun ChatScreen(
                     onRename = { renaming = true },
                     onFork = { onRunCommand("fork", "") },
                     onCompact = { onRunCommand("compact", "") },
+                    onExport = onExport,
                     onDelete = { confirmingDelete = true },
                 )
             },
@@ -785,7 +805,7 @@ private fun ChatScreen(
 /** Rename and fork ride the builtin slash path; delete confirms before it drops the session. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SessionMenu(onRename: () -> Unit, onFork: () -> Unit, onCompact: () -> Unit, onDelete: () -> Unit) {
+private fun SessionMenu(onRename: () -> Unit, onFork: () -> Unit, onCompact: () -> Unit, onExport: () -> Unit, onDelete: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         BarButton(Icons.Outlined.MoreVert, "Session menu") { open = true }
@@ -801,6 +821,7 @@ private fun SessionMenu(onRename: () -> Unit, onFork: () -> Unit, onCompact: () 
             SessionMenuItem("Rename") { open = false; onRename() }
             SessionMenuItem("Fork") { open = false; onFork() }
             SessionMenuItem("Compact") { open = false; onCompact() }
+            SessionMenuItem("Share JSON") { open = false; onExport() }
             SessionMenuItem("Delete", danger = true) { open = false; onDelete() }
         }
     }
