@@ -223,4 +223,20 @@ class ApiModelsTest {
         val input = json.decodeFromString(JsonObject.serializer(), """{"command":"ls"}""")
         assertEquals(null, todoItems(input))
     }
+
+    @Test
+    fun `a model label parses back into a ref, with an optional variant`() {
+        val plain = modelRefOf("anthropic/claude-sonnet-4")
+        assertEquals("anthropic", plain?.providerID)
+        assertEquals("claude-sonnet-4", plain?.id)
+        assertEquals(null, plain?.variant)
+        val variant = modelRefOf("opencode/nemotron-3.5-super-vl-free#high")
+        assertEquals("opencode", variant?.providerID)
+        assertEquals("nemotron-3.5-super-vl-free", variant?.id)
+        assertEquals("high", variant?.variant)
+        assertEquals("opencode/nemotron-3.5-super-vl-free#high", variant?.label())
+        // A label with no provider or no id is not a model.
+        assertEquals(null, modelRefOf("claude-sonnet-4"))
+        assertEquals(null, modelRefOf("anthropic/"))
+    }
 }

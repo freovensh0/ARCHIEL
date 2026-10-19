@@ -43,6 +43,9 @@ data class ChatState(
     val forms: List<FormInfo> = emptyList(),
     val model: String? = null,
     val agent: String? = null,
+    /** Preselected for a new session and kept on disk; null means the server picks. */
+    val defaultModel: String? = null,
+    val defaultAgent: String? = null,
     val previews: Map<String, String> = emptyMap(),
     val sessionId: String? = null,
     val title: String? = null,
@@ -103,6 +106,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** Favourites and hidden models are device preferences, keyed by "provider/model". */
     private val modelPrefs = app.getSharedPreferences("models", android.content.Context.MODE_PRIVATE)
 
+    /** The model and agent a new session is created with, kept across restarts. */
+    private val defaults = app.getSharedPreferences("defaults", android.content.Context.MODE_PRIVATE)
+
     // Event payloads carry the same shapes as the API responses; decode them with the same tolerance.
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -110,6 +116,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         ChatState(
             favorites = modelPrefs.getStringSet("favorites", emptySet()).orEmpty(),
             hidden = modelPrefs.getStringSet("hidden", emptySet()).orEmpty(),
+            defaultModel = defaults.getString("model", null),
+            defaultAgent = defaults.getString("agent", null),
         ),
     )
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -333,6 +341,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun flip(set: Set<String>, key: String): Set<String> = if (key in set) set - key else set + key
 
+    fun setDefaultModel(label: String?) {
+        putDefault("model", label)
+        _state.update { it.copy(defaultModel = label) }
+    }
+
+    fun setDefaultAgent(id: String?) {
+        putDefault("agent", id)
+        _state.update { it.copy(defaultAgent = id) }
+    }
+
+    /** A null value clears the key rather than storing the text "null". */
+    private fun putDefault(key: String, value: String?) {
+        val edit = defaults.edit()
+        if (value == null) edit.remove(key) else edit.putString(key, value)
+        edit.apply()
+    }
+
     fun setAgent(agent: String) {
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
@@ -487,7 +512,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun newSession(onCreated: (String) -> Unit) = viewModelScope.launch {
-        runCatching { client.createSession() }
+        val current = _state.value
+        runCatching { client.createSession(agent = current.defaultAgent, model = current.defaultModel?.let { modelRefOf(it) }) }
             .onSuccess { s ->
                 _state.update { it.copy(sessions = listOf(s) + it.sessions.filterNot { x -> x.id == s.id }) }
                 open(s.id)

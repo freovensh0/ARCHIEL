@@ -122,6 +122,9 @@ class MainActivity : ComponentActivity() {
 
 private enum class Screen { Sessions, Chat, Connection, Pickers }
 
+/** The picker serves the open session or one of the two new-session defaults. */
+private enum class PickerMode { Session, DefaultModel, DefaultAgent }
+
 private typealias BarAction = Triple<ImageVector, String, () -> Unit>
 
 @Composable
@@ -129,11 +132,24 @@ private fun App() {
     val ctx = LocalContext.current
     var cfg by remember { mutableStateOf(Cfg.load(ctx)) }
     var screen by rememberSaveable { mutableStateOf(Screen.Sessions) }
+    var pickerMode by rememberSaveable { mutableStateOf(PickerMode.Session) }
     val vm: ChatViewModel = viewModel(key = "${cfg.baseUrl}|${cfg.password}")
     val state by vm.state.collectAsState()
     val canRetry by vm.canRetry.collectAsState()
 
-    BackHandler(enabled = screen != Screen.Sessions) { screen = Screen.Sessions }
+    // Both entry points fetch the picker lists the first time they are needed.
+    val openPicker: (PickerMode) -> Unit = { mode -> vm.loadPickers(); pickerMode = mode; screen = Screen.Pickers }
+    // The session picker walks back to the chat; the two defaults walk back to the connection.
+    val closePicker: () -> Unit = { screen = if (pickerMode == PickerMode.Session) Screen.Chat else Screen.Connection }
+
+    // The picker walks back to where it came from; every other screen walks back to the session list.
+    BackHandler(enabled = screen != Screen.Sessions) {
+        screen = if (screen == Screen.Pickers) {
+            if (pickerMode == PickerMode.Session) Screen.Chat else Screen.Connection
+        } else {
+            Screen.Sessions
+        }
+    }
 
     when (screen) {
         Screen.Sessions -> SessionsScreen(
@@ -158,7 +174,7 @@ private fun App() {
             onReplyPermission = vm::replyPermission,
             onReplyForm = vm::replyForm,
             onCancelForm = vm::cancelForm,
-            onOpenPickers = { vm.loadPickers(); screen = Screen.Pickers },
+            onOpenPickers = { openPicker(PickerMode.Session) },
             onLoadCommands = vm::loadCommands,
             onRename = { vm.runCommand("rename", it) },
             onDelete = { vm.deleteSession { vm.close(); screen = Screen.Sessions } },
@@ -168,14 +184,27 @@ private fun App() {
 
         Screen.Pickers -> PickerScreen(
             state = state,
-            onBack = { screen = Screen.Chat },
+            mode = pickerMode,
+            onBack = closePicker,
             onPickModel = { provider, model, variant ->
-                vm.setModel(provider, model, variant)
-                screen = Screen.Chat
+                when (pickerMode) {
+                    PickerMode.Session -> vm.setModel(provider, model, variant)
+                    PickerMode.DefaultModel -> vm.setDefaultModel(ModelRef(id = model, providerID = provider, variant = variant).label())
+                    PickerMode.DefaultAgent -> Unit
+                }
+                closePicker()
             },
             onPickAgent = { agent ->
-                vm.setAgent(agent)
-                screen = Screen.Chat
+                when (pickerMode) {
+                    PickerMode.Session -> vm.setAgent(agent)
+                    PickerMode.DefaultAgent -> vm.setDefaultAgent(agent)
+                    PickerMode.DefaultModel -> Unit
+                }
+                closePicker()
+            },
+            onClearDefault = {
+                if (pickerMode == PickerMode.DefaultAgent) vm.setDefaultAgent(null) else vm.setDefaultModel(null)
+                closePicker()
             },
             onToggleFavorite = vm::toggleFavorite,
             onToggleHidden = vm::toggleHidden,
@@ -186,6 +215,8 @@ private fun App() {
             state = state,
             onBack = { screen = Screen.Sessions },
             onRefresh = vm::refresh,
+            onDefaultModel = { openPicker(PickerMode.DefaultModel) },
+            onDefaultAgent = { openPicker(PickerMode.DefaultAgent) },
             onSave = { Cfg.save(ctx, it); cfg = it; screen = Screen.Sessions },
         )
     }
@@ -1730,13 +1761,20 @@ private fun Dock(
 @Composable
 private fun PickerScreen(
     state: ChatState,
+    mode: PickerMode,
     onBack: () -> Unit,
     onPickModel: (String, String, String?) -> Unit,
     onPickAgent: (String) -> Unit,
+    onClearDefault: () -> Unit,
     onToggleFavorite: (String) -> Unit,
     onToggleHidden: (String) -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
+    // Session mode edits the open session; the two default modes edit what a new session starts with.
+    val showModels = mode != PickerMode.DefaultAgent
+    val showAgents = mode != PickerMode.DefaultModel
+    val selectedModel = if (mode == PickerMode.DefaultModel) state.defaultModel else state.model
+    val selectedAgent = if (mode == PickerMode.DefaultAgent) state.defaultAgent else state.agent
     val all = remember(state.models, query) {
         val q = query.trim().lowercase()
         state.models
@@ -1753,57 +1791,79 @@ private fun PickerScreen(
     val subagents = agents.filter { it.mode == "subagent" }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        TopBar(title = "Model and agent", onBack = onBack)
-        state.usage?.let { usage ->
-            Text(
-                "This session · ${tokenCount(usage.tokens.total())} tokens · ${costText(usage.cost)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s),
+        TopBar(
+            title = when (mode) {
+                PickerMode.Session -> "Model and agent"
+                PickerMode.DefaultModel -> "Default model"
+                PickerMode.DefaultAgent -> "Default agent"
+            },
+            onBack = onBack,
+        )
+        if (mode == PickerMode.Session) {
+            state.usage?.let { usage ->
+                Text(
+                    "This session · ${tokenCount(usage.tokens.total())} tokens · ${costText(usage.cost)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s),
+                )
+            }
+        }
+        if (showModels) {
+            TextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                placeholder = {
+                    Text(
+                        if (state.models.isEmpty()) "Search models" else "Search ${state.models.size} models",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                shape = RoundedCornerShape(Radius.chip),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    focusedIndicatorColor = Transparent,
+                    unfocusedIndicatorColor = Transparent,
+                    disabledIndicatorColor = Transparent,
+                    cursorColor = AccentFill,
+                ),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.m),
             )
         }
-        TextField(
-            value = query,
-            onValueChange = { query = it },
-            singleLine = true,
-            placeholder = {
-                Text(
-                    if (state.models.isEmpty()) "Search models" else "Search ${state.models.size} models",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            },
-            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-            shape = RoundedCornerShape(Radius.chip),
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = MaterialTheme.colorScheme.surface,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                focusedIndicatorColor = Transparent,
-                unfocusedIndicatorColor = Transparent,
-                disabledIndicatorColor = Transparent,
-                cursorColor = AccentFill,
-            ),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.m),
-        )
         LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-            if (query.isEmpty() && primaries.isNotEmpty()) {
+            if (mode != PickerMode.Session) {
+                item("server-default") {
+                    PickerRow(
+                        title = "Server default",
+                        detail = "Let the server pick for a new session",
+                        selected = (if (mode == PickerMode.DefaultAgent) selectedAgent else selectedModel) == null,
+                        mono = false,
+                        onClick = onClearDefault,
+                    )
+                }
+            }
+            if (showAgents && query.isEmpty() && primaries.isNotEmpty()) {
                 item("agents") { SectionLabel("AGENT") }
                 items(primaries, key = { "agent-${it.id}" }) { agent ->
-                    AgentRow(agent = agent, selected = state.agent == agent.id, onClick = { onPickAgent(agent.id) })
+                    AgentRow(agent = agent, selected = selectedAgent == agent.id, onClick = { onPickAgent(agent.id) })
                 }
             }
-            if (query.isEmpty() && subagents.isNotEmpty()) {
+            if (showAgents && query.isEmpty() && subagents.isNotEmpty()) {
                 item("subagents") { SectionLabel("SUBAGENT") }
                 items(subagents, key = { "subagent-${it.id}" }) { agent ->
-                    AgentRow(agent = agent, selected = state.agent == agent.id, onClick = { onPickAgent(agent.id) })
+                    AgentRow(agent = agent, selected = selectedAgent == agent.id, onClick = { onPickAgent(agent.id) })
                 }
             }
-            if (favorites.isNotEmpty()) {
+            if (showModels && favorites.isNotEmpty()) {
                 if (query.isEmpty()) item("favorites") { SectionLabel("FAVORITES") }
                 items(favorites, key = { "fav-${modelKey(it)}" }) { model ->
                     ModelRow(
                         model = model,
-                        selectedModel = state.model,
+                        selectedModel = selectedModel,
                         favorite = true,
                         hidden = false,
                         enabled = true,
@@ -1813,12 +1873,12 @@ private fun PickerScreen(
                     )
                 }
             }
-            if (rest.isNotEmpty()) {
+            if (showModels && rest.isNotEmpty()) {
                 if (query.isEmpty()) item("models") { SectionLabel("MODEL") }
                 items(rest, key = { "model-${modelKey(it)}" }) { model ->
                     ModelRow(
                         model = model,
-                        selectedModel = state.model,
+                        selectedModel = selectedModel,
                         favorite = false,
                         hidden = false,
                         enabled = true,
@@ -1828,12 +1888,12 @@ private fun PickerScreen(
                     )
                 }
             }
-            if (hidden.isNotEmpty()) {
+            if (showModels && hidden.isNotEmpty()) {
                 if (query.isEmpty()) item("hidden") { SectionLabel("HIDDEN") }
                 items(hidden, key = { "hidden-${modelKey(it)}" }) { model ->
                     ModelRow(
                         model = model,
-                        selectedModel = state.model,
+                        selectedModel = selectedModel,
                         favorite = modelKey(model) in state.favorites,
                         hidden = true,
                         enabled = false,
@@ -1843,8 +1903,11 @@ private fun PickerScreen(
                     )
                 }
             }
-            if (all.isEmpty()) {
+            if (showModels && all.isEmpty()) {
                 item("none") { Centered("No match", "Nothing on this server matches that search.") }
+            }
+            if (showAgents && !showModels && agents.isEmpty()) {
+                item("none") { Centered("No agents", "This server lists no agents to choose from.") }
             }
         }
     }
@@ -2023,6 +2086,8 @@ private fun ConnectionScreen(
     state: ChatState,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
+    onDefaultModel: () -> Unit,
+    onDefaultAgent: () -> Unit,
     onSave: (ServerConfig) -> Unit,
 ) {
     var address by rememberSaveable { mutableStateOf(cfg.baseUrl) }
@@ -2039,6 +2104,8 @@ private fun ConnectionScreen(
         ) {
             Spacer(Modifier.height(Space.l))
             StatusCard(state)
+            SettingRow("Default model", state.defaultModel ?: "not set", onDefaultModel)
+            SettingRow("Default agent", state.defaultAgent ?: "not set", onDefaultAgent)
             FieldGroup("SERVER ADDRESS", address, { address = it }, "http://127.0.0.1:4096")
             Hairline()
             FieldGroup("PASSWORD", password, { password = it }, "printed by opencode serve", secret = true)
@@ -2102,6 +2169,33 @@ private fun StatusRow(key: String, value: String, dot: Color? = null) {
             )
         }
     }
+}
+
+@Composable
+private fun SettingRow(label: String, value: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .heightIn(min = Size.hit)
+            .padding(horizontal = Space.l, vertical = Space.m),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    Hairline()
 }
 
 @Composable

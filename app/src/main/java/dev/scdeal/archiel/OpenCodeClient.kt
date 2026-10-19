@@ -58,6 +58,18 @@ fun TokenUsage.total(): Long = input + output + reasoning + cache.read + cache.w
 
 fun ModelRef.label(): String = "$providerID/$id" + (variant?.let { "#$it" } ?: "")
 
+/** The inverse of [label]; null when the text does not name a provider and an id. */
+fun modelRefOf(label: String): ModelRef? {
+    val slash = label.indexOf('/')
+    if (slash <= 0) return null
+    val rest = label.substring(slash + 1)
+    val hash = rest.indexOf('#')
+    val id = if (hash >= 0) rest.substring(0, hash) else rest
+    if (id.isEmpty()) return null
+    val variant = if (hash >= 0) rest.substring(hash + 1).ifEmpty { null } else null
+    return ModelRef(id = id, providerID = label.substring(0, slash), variant = variant)
+}
+
 @Serializable
 data class SessionTime(val updated: Long = 0)
 
@@ -296,8 +308,18 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
         return json.decodeFromString(Data.serializer(Session.serializer()), call("GET", "/api/session?limit=50$query")).data
     }
 
-    suspend fun createSession(): Session =
-        json.decodeFromString(One.serializer(Session.serializer()), call("POST", "/api/session")).data
+    suspend fun createSession(agent: String? = null, model: ModelRef? = null): Session {
+        val body = buildJsonObject {
+            if (agent != null) put("agent", agent)
+            if (model != null) put("model", buildJsonObject {
+                put("providerID", model.providerID)
+                put("id", model.id)
+                // The server rejects a null variant, so it is omitted until the model has one.
+                if (model.variant != null) put("variant", model.variant)
+            })
+        }
+        return json.decodeFromString(One.serializer(Session.serializer()), call("POST", "/api/session", body.toString())).data
+    }
 
     suspend fun messages(sessionID: String): List<Message> =
         json.decodeFromString(Data.serializer(Message.serializer()), call("GET", "/api/session/$sessionID/message"))
