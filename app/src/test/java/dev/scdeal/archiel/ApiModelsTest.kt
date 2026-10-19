@@ -286,4 +286,46 @@ class ApiModelsTest {
         assertEquals(null, modelRefOf("claude-sonnet-4"))
         assertEquals(null, modelRefOf("anthropic/"))
     }
+
+    @Test
+    fun `a shell row decodes its status and exit code`() {
+        val row = """
+            {"location":{"directory":"/home/x/project"},
+             "data":{"id":"sh_1","command":"ls -a","cwd":"/home/x/project","shell":"bash",
+                     "status":"exited","exit":0,"time":{"started":1,"completed":2}}}
+        """.trimIndent()
+        val shell = json.decodeFromJsonElement(ShellInfo.serializer(), json.parseToJsonElement(row).jsonObject.getValue("data"))
+        assertEquals("sh_1", shell.id)
+        assertEquals("exited", shell.status)
+        assertEquals("ls -a", shell.command)
+        assertEquals(0, shell.exit)
+        // A shell still running has no exit yet, so the field stays null rather than failing the decode.
+        val running = json.decodeFromJsonElement(
+            ShellInfo.serializer(),
+            json.parseToJsonElement("""{"id":"sh_2","status":"running"}"""),
+        )
+        assertEquals(null, running.exit)
+    }
+
+    @Test
+    fun `a shell output page decodes its cursor and truncation flag`() {
+        val row = """
+            {"location":{"directory":"/home/x/project"},
+             "data":{"output":"total 4\n","cursor":8,"size":8,"truncated":false}}
+        """.trimIndent()
+        val page = json.decodeFromJsonElement(ShellOutput.serializer(), json.parseToJsonElement(row).jsonObject.getValue("data"))
+        assertEquals("total 4\n", page.output)
+        assertEquals(8L, page.cursor)
+        assertEquals(8L, page.size)
+        assertEquals(false, page.truncated)
+    }
+
+    @Test
+    fun `shell escape sequences come out of the output`() {
+        // A command that colours its output would otherwise dump CSI codes onto the phone.
+        assertEquals("failed: 1 test\n", stripAnsi("\u001B[31mfailed\u001B[0m: 1 test\n"))
+        // An OSC title is a sequence too, and the text after it stays.
+        assertEquals("build done", stripAnsi("\u001B]0;make\u0007build done"))
+        assertEquals("plain text", stripAnsi("plain text"))
+    }
 }

@@ -78,6 +78,7 @@ import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -146,7 +147,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { Sessions, Chat, Connection, Pickers }
+private enum class Screen { Sessions, Chat, Shell, Connection, Pickers }
 
 /** The picker serves the open session or one of the two new-session defaults. */
 private enum class PickerMode { Session, DefaultModel, DefaultAgent }
@@ -168,12 +169,13 @@ private fun App() {
     // The session picker walks back to the chat; the two defaults walk back to the connection.
     val closePicker: () -> Unit = { screen = if (pickerMode == PickerMode.Session) Screen.Chat else Screen.Connection }
 
-    // The picker walks back to where it came from; every other screen walks back to the session list.
+    // The picker walks back to where it came from; the shell walks back to the chat; everything else
+    // walks back to the session list.
     BackHandler(enabled = screen != Screen.Sessions) {
-        screen = if (screen == Screen.Pickers) {
-            if (pickerMode == PickerMode.Session) Screen.Chat else Screen.Connection
-        } else {
-            Screen.Sessions
+        screen = when (screen) {
+            Screen.Pickers -> if (pickerMode == PickerMode.Session) Screen.Chat else Screen.Connection
+            Screen.Shell -> Screen.Chat
+            else -> Screen.Sessions
         }
     }
 
@@ -205,11 +207,18 @@ private fun App() {
             onReplyForm = vm::replyForm,
             onCancelForm = vm::cancelForm,
             onOpenPickers = { openPicker(PickerMode.Session) },
+            onShell = { screen = Screen.Shell },
             onLoadCommands = vm::loadCommands,
             onRename = { vm.runCommand("rename", it) },
             onDelete = { vm.deleteSession { vm.close(); screen = Screen.Sessions } },
             onExport = vm::exportSession,
             onShareDone = vm::clearShare,
+        )
+
+        Screen.Shell -> ShellScreen(
+            state = state,
+            onBack = { screen = Screen.Chat },
+            onRun = vm::runShell,
         )
 
         Screen.Pickers -> PickerScreen(
@@ -713,6 +722,7 @@ private fun ChatScreen(
     onReplyForm: (String, JsonObject) -> Unit,
     onCancelForm: (String) -> Unit,
     onOpenPickers: () -> Unit,
+    onShell: () -> Unit,
     onLoadCommands: () -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
@@ -757,6 +767,7 @@ private fun ChatScreen(
                 else -> null
             },
             actions = listOf(
+                BarAction(Icons.Outlined.Terminal, "Run a command on the server", onShell),
                 BarAction(Icons.Outlined.Tune, "Switch model or agent", onOpenPickers),
             ),
             trailing = {
@@ -2132,6 +2143,122 @@ private fun fileSize(bytes: Int): String = when {
 }
 
 
+// ------------------------------------------------------------------ shell
+
+/** A quick runner, not a terminal: the command goes to the server and its paged output comes back. */
+@Composable
+private fun ShellScreen(state: ChatState, onBack: () -> Unit, onRun: (String) -> Unit) {
+    // The field is local, so it starts empty every time the screen opens; the run itself lives in the view model.
+    var command by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        TopBar(title = "Shell", onBack = onBack)
+        state.error?.let { sentence -> ErrorCard(sentence, null) }
+        Column(Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.m)) {
+            TextField(
+                value = command,
+                onValueChange = { command = it },
+                placeholder = {
+                    Text(
+                        "Command to run on the server",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                singleLine = true,
+                shape = RoundedCornerShape(Radius.panel),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    focusedIndicatorColor = Transparent,
+                    unfocusedIndicatorColor = Transparent,
+                    disabledIndicatorColor = Transparent,
+                    cursorColor = AccentFill,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            state.location?.takeIf { it.isNotBlank() }?.let { directory ->
+                Spacer(Modifier.height(Space.xs))
+                Text(
+                    "Runs in $directory",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(Space.s))
+            PrimaryButton(
+                label = if (state.shellBusy) "Running" else "Run",
+                onClick = { onRun(command) },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = command.isNotBlank() && !state.shellBusy,
+            )
+        }
+        Hairline()
+        state.shell?.let { run ->
+            ShellCommandHead(run, state.shellBusy)
+            Hairline()
+        }
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(Space.l),
+        ) {
+            val run = state.shell
+            if (run == null) {
+                ShellNote("No command has been run in this session.")
+            } else {
+                when {
+                    run.output.isBlank() && state.shellBusy -> ShellNote("The command is running.")
+                    run.output.isBlank() -> ShellNote("The command produced no output.")
+                    else -> SelectionContainer {
+                        Text(
+                            run.output,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The command and its outcome: the exit code is the only thing worth reading back. */
+@Composable
+private fun ShellCommandHead(run: ShellRun, busy: Boolean) {
+    val (outcome, tone) = when {
+        busy || run.status == "running" -> "running" to MaterialTheme.colorScheme.onSurfaceVariant
+        run.exit == 0 -> "exit 0" to MaterialTheme.colorScheme.onSurfaceVariant
+        run.exit != null -> "failed · exit ${run.exit}" to MaterialTheme.colorScheme.error
+        else -> (run.status ?: "done") to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SelectionContainer(Modifier.weight(1f)) {
+            Text(
+                "\$ ${run.command}",
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(Space.m))
+        Text(outcome, style = MaterialTheme.typography.labelSmall, color = tone)
+    }
+}
+
+@Composable
+private fun ShellNote(text: String) {
+    Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
 // ------------------------------------------------------------------ pickers
 
 @Composable
@@ -2610,16 +2737,17 @@ private fun FieldGroup(label: String, value: String, onChange: (String) -> Unit,
 }
 
 @Composable
-private fun PrimaryButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun PrimaryButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
     Box(
         modifier
             .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(Radius.control))
-            .background(AccentFill)
-            .clickable(onClick = onClick),
+            .background(if (enabled) AccentFill else MaterialTheme.colorScheme.surface)
+            .then(if (enabled) Modifier else Modifier.border(Size.hairline, MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.control)))
+            .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, style = MaterialTheme.typography.labelLarge, color = OnAccent)
+        Text(label, style = MaterialTheme.typography.labelLarge, color = if (enabled) OnAccent else MaterialTheme.colorScheme.outline)
     }
 }
 

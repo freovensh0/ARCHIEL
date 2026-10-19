@@ -33,6 +33,9 @@ data class Usage(val tokens: TokenUsage, val cost: Double)
 /** The open session's context fill; the limit is null until the model that ran the last turn is known. */
 data class ContextUsage(val used: Long, val limit: Long?)
 
+/** The last command run in the shell screen: its paged output and, once it exits, its code. */
+data class ShellRun(val id: String, val command: String, val output: String = "", val status: String? = null, val exit: Int? = null)
+
 /** A file picked for the next prompt. `data` is the canonical base64 payload, kept so Retry can resend it. */
 data class Attachment(val name: String, val mime: String, val bytes: Int, val data: String)
 
@@ -79,10 +82,19 @@ data class ChatState(
     val shareUri: Uri? = null,
     val usage: Usage? = null,
     val context: ContextUsage? = null,
+    /** The shell screen's run; cleared when the chat closes, which is also what stops its polling. */
+    val shell: ShellRun? = null,
+    val shellBusy: Boolean = false,
     val error: String? = null,
 )
 
 private const val SEARCH_DEBOUNCE_MS = 250L
+
+/** The shell is polled for output and status; a quiet command is treated as done after this many idle polls. */
+private const val SHELL_POLL_MS = 600L
+private const val SHELL_STALE_POLLS = 5
+/** A command that runs longer than this stops being polled; the server keeps it alive. */
+private const val SHELL_MAX_MS = 10 * 60 * 1000L
 
 /** The server refuses a data URL larger than 20 MB, so the app stops it before the encode. */
 private const val MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -116,6 +128,11 @@ private val MENTION = Regex("(^|\\s)@([A-Za-z0-9_-]*)$")
 /** The word the dock is offering agents for, or null when the text is not sitting on a mention. */
 internal fun mentionQuery(text: String): String? = MENTION.find(text)?.groupValues?.get(2)
 
+/** CSI colour/cursor codes and OSC titles: a command that colours its output would otherwise dump them on screen. */
+private val ANSI = Regex("\u001B(?:\\[[0-9;?]*[ -/]*[@-~]|\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\)|[ -/]*[@-~])")
+
+internal fun stripAnsi(text: String): String = text.replace(ANSI, "")
+
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val cfg = Cfg.load(app)
     private val client = OpenCodeClient(cfg.baseUrl, cfg.password)
@@ -148,6 +165,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The in-flight debounce for the sessions search, so typing cancels the request before it fires. */
     private var searchJob: Job? = null
+
+    /** The shell polling loop; one at a time, and `close()` cancels it. */
+    private var shellJob: Job? = null
 
     private val _canRetry = MutableStateFlow(false)
     val canRetry: StateFlow<Boolean> = _canRetry.asStateFlow()
@@ -529,8 +549,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun close() {
+        // Leaving the chat is what stops the shell polling; the run is dropped with it.
+        shellJob?.cancel()
         _state.update {
-            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", attachments = emptyList(), mentions = emptyList(), shareUri = null, usage = null, context = null)
+            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", attachments = emptyList(), mentions = emptyList(), shareUri = null, usage = null, context = null, shell = null, shellBusy = false)
         }
     }
 
@@ -669,6 +691,69 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { client.interrupt(id) }
                 .onFailure { e -> fail("Could not stop it: ${e.message}") }
+        }
+    }
+
+    /**
+     * Runs one command on the server in the open session's directory. The runner has no stdin, so the
+     * loop only reads: the output page grows the text, the shell row carries the status and exit code.
+     */
+    fun runShell(command: String) {
+        val body = command.trim()
+        if (body.isEmpty()) return
+        val directory = _state.value.location
+        // A second Run replaces the first; the old loop is cancelled before a new one starts.
+        shellJob?.cancel()
+        shellJob = viewModelScope.launch {
+            _state.update { it.copy(shellBusy = true, shell = ShellRun(id = "", command = body), error = null) }
+            val created = try {
+                client.runShell(body, directory)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(shellBusy = false, shell = null) }
+                fail("Could not run the command: ${e.message}")
+                return@launch
+            }
+            var status = created.status
+            var exit = created.exit
+            var cursor = 0L
+            var idle = 0
+            val started = System.currentTimeMillis()
+            _state.update { it.copy(shell = ShellRun(id = created.id, command = body, status = status, exit = exit)) }
+            while (true) {
+                val chunk = try {
+                    client.shellOutput(created.id, cursor)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    _state.update { it.copy(shellBusy = false) }
+                    fail("Could not run the command: ${e.message}")
+                    return@launch
+                }
+                val text = stripAnsi(chunk.output)
+                val moved = text.isNotEmpty() || chunk.cursor != cursor
+                cursor = chunk.cursor
+                if (text.isNotEmpty()) {
+                    _state.update { s -> s.copy(shell = s.shell?.let { it.copy(output = it.output + text) }) }
+                }
+                try {
+                    val info = client.shell(created.id)
+                    status = info.status
+                    exit = info.exit
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // The output that did arrive still stands; the next poll retries the status read.
+                }
+                idle = if (moved) 0 else idle + 1
+                // The server's status is the truth; the idle counter only ends a run whose status could not be read.
+                val done = if (status != null) status != "running" else idle >= SHELL_STALE_POLLS
+                if (done || System.currentTimeMillis() - started > SHELL_MAX_MS) break
+                _state.update { s -> s.copy(shell = s.shell?.copy(status = status, exit = exit)) }
+                delay(SHELL_POLL_MS)
+            }
+            _state.update { it.copy(shellBusy = false, shell = it.shell?.copy(status = status, exit = exit)) }
         }
     }
 

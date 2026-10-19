@@ -198,6 +198,14 @@ data class FormOption(val value: String, val label: String, val description: Str
 @Serializable
 data class ServerInfo(val version: String? = null, val pid: Int? = null, val urls: List<String> = emptyList())
 
+/** One server-run command. `status` is "running" until it exits; `exit` is only set once it has. */
+@Serializable
+data class ShellInfo(val id: String, val status: String? = null, val command: String? = null, val exit: Int? = null)
+
+/** A page of a shell's combined output from an absolute byte cursor. */
+@Serializable
+data class ShellOutput(val output: String = "", val cursor: Long = 0, val size: Long = 0, val truncated: Boolean = false)
+
 @Serializable
 private class Data<T>(val data: List<T> = emptyList())
 
@@ -268,6 +276,22 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
         val query = directory?.let { "?location[directory]=" + URLEncoder.encode(it, "UTF-8") }.orEmpty()
         return json.decodeFromString(Data.serializer(CommandInfo.serializer()), call("GET", "/api/command$query")).data
     }
+
+    /** A one-shot runner: the server owns the process and pages its combined output back by cursor. */
+    suspend fun runShell(command: String, cwd: String?): ShellInfo {
+        val body = buildJsonObject {
+            put("command", command)
+            if (cwd != null) put("cwd", cwd)
+        }
+        return json.decodeFromString(One.serializer(ShellInfo.serializer()), call("POST", "/api/shell", body.toString())).data
+    }
+
+    /** The shell row is where the status and the exit code live once the command has exited. */
+    suspend fun shell(id: String): ShellInfo =
+        json.decodeFromString(One.serializer(ShellInfo.serializer()), call("GET", "/api/shell/$id")).data
+
+    suspend fun shellOutput(id: String, cursor: Long): ShellOutput =
+        json.decodeFromString(One.serializer(ShellOutput.serializer()), call("GET", "/api/shell/$id/output?cursor=$cursor")).data
 
     suspend fun permissions(sessionID: String): List<PermissionRequest> =
         json.decodeFromString(Data.serializer(PermissionRequest.serializer()), call("GET", "/api/session/$sessionID/permission")).data
