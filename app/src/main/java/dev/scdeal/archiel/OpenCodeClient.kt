@@ -78,6 +78,8 @@ data class PartState(
     val status: String? = null,
     val input: JsonObject? = null,
     val content: List<PartText>? = null,
+    // Read only for `patch`: files[] with each unified diff and its counts.
+    val metadata: JsonObject? = null,
 )
 
 @Serializable

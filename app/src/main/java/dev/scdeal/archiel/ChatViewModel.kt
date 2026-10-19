@@ -132,9 +132,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             type == "session.tool.called" ->
                 upsertTool(data.str("id")) { it.copy(state = it.state?.copy(input = data["input"] as? JsonObject) ?: PartState(status = "running", input = data["input"] as? JsonObject)) }
             type == "session.tool.success" ->
-                upsertTool(data.str("id")) { it.copy(state = (it.state ?: PartState()).copy(status = "completed", content = toolOutput(data))) }
+                upsertTool(data.str("id")) { it.copy(state = (it.state ?: PartState()).copy(status = "completed", content = toolOutput(data), metadata = data["metadata"] as? JsonObject)) }
             type == "session.tool.failed" ->
-                upsertTool(data.str("id")) { it.copy(state = (it.state ?: PartState()).copy(status = "error", content = toolOutput(data))) }
+                upsertTool(data.str("id")) { it.copy(state = (it.state ?: PartState()).copy(status = "error", content = toolOutput(data), metadata = data["metadata"] as? JsonObject)) }
             type == "session.execution.started" -> {
                 // A run for the prompt has begun, so the server has it even before the reload.
                 _state.update { it.copy(busy = true, cutShort = false, tools = emptyList(), queuedId = null) }

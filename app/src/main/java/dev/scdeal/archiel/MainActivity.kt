@@ -75,13 +75,19 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import java.text.SimpleDateFormat
@@ -761,6 +767,7 @@ private fun ToolBlock(part: Part) {
     val status = part.state?.status ?: "running"
     val command = (part.state?.input?.get("command") as? JsonPrimitive)?.contentOrNull
     val output = part.state?.content.orEmpty().mapNotNull { it.text }.joinToString("\n")
+    val files = patchFiles(part.state)
     var open by remember { mutableStateOf(false) }
     Column(
         Modifier
@@ -817,29 +824,142 @@ private fun ToolBlock(part: Part) {
             }
         }
         if (open) {
-            if (command != null) {
-                Spacer(Modifier.height(Space.s))
-                SelectionContainer {
-                    Text(
-                        "\$ $command",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
+            if (files.isNotEmpty()) {
+                files.forEachIndexed { index, file ->
+                    if (index > 0) {
+                        Spacer(Modifier.height(Space.s))
+                        Hairline()
+                        Spacer(Modifier.height(Space.s))
+                    }
+                    PatchFileBlock(file)
                 }
-            }
-            if (output.isNotBlank()) {
-                Spacer(Modifier.height(Space.s))
-                Hairline()
-                Spacer(Modifier.height(Space.s))
-                SelectionContainer {
-                    Text(
-                        output,
-                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            } else {
+                if (command != null) {
+                    Spacer(Modifier.height(Space.s))
+                    SelectionContainer {
+                        Text(
+                            "\$ $command",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+                if (output.isNotBlank()) {
+                    Spacer(Modifier.height(Space.s))
+                    Hairline()
+                    Spacer(Modifier.height(Space.s))
+                    SelectionContainer {
+                        Text(
+                            output,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+/** One file of a `patch` call: the server hands the diff over in the tool metadata. */
+private class PatchFile(
+    val file: String,
+    val patch: String,
+    val status: String?,
+    val additions: String?,
+    val deletions: String?,
+)
+
+private fun patchFiles(state: PartState?): List<PatchFile> =
+    (state?.metadata?.get("files") as? JsonArray).orEmpty().mapNotNull { element ->
+        val row = element as? JsonObject ?: return@mapNotNull null
+        val file = row.str("file") ?: return@mapNotNull null
+        val patch = row.str("patch") ?: return@mapNotNull null
+        PatchFile(file, patch, row.str("status"), row.str("additions"), row.str("deletions"))
+    }
+
+@Composable
+private fun PatchFileBlock(file: PatchFile) {
+    val ctx = LocalContext.current
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            when (file.status) {
+                "added" -> "A"
+                "deleted" -> "D"
+                "modified" -> "M"
+                else -> "?"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = when (file.status) {
+                "added" -> DiffAdd
+                "deleted" -> MaterialTheme.colorScheme.error
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        Spacer(Modifier.width(Space.s))
+        Text(
+            file.file,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        val counts = listOfNotNull(
+            file.additions?.let { "+$it" },
+            file.deletions?.let { "−$it" },
+        ).joinToString(" ")
+        if (counts.isNotEmpty()) {
+            Spacer(Modifier.width(Space.s))
+            Text(counts, style = MaterialTheme.typography.labelSmall)
+        }
+        Box(
+            Modifier
+                .size(Size.hitSmall)
+                .clip(RoundedCornerShape(Radius.chip))
+                .clickable {
+                    ctx.getSystemService(ClipboardManager::class.java)
+                        ?.setPrimaryClip(ClipData.newPlainText(file.file, file.patch))
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Outlined.ContentCopy,
+                contentDescription = "Copy patch",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+    Spacer(Modifier.height(Space.xs))
+    SelectionContainer {
+        Text(
+            diffText(file.patch),
+            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+        )
+    }
+}
+
+@Composable
+private fun diffText(patch: String): AnnotatedString {
+    // Read the scheme before the builder lambda: it runs outside the composable scope.
+    val base = MaterialTheme.colorScheme.onSurface
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val removed = MaterialTheme.colorScheme.error
+    return buildAnnotatedString {
+        patch.lineSequence()
+            // The header row above already names the file, so the diff's own ---/+++ line adds noise.
+            .filterNot { it.startsWith("--- ") || it.startsWith("+++ ") }
+            .forEachIndexed { index, line ->
+                if (index > 0) append('\n')
+                val color = when {
+                    line.startsWith("@@") -> muted
+                    line.startsWith("+") -> DiffAdd
+                    line.startsWith("-") -> removed
+                    else -> base
+                }
+                withStyle(SpanStyle(color = color)) { append(line) }
+            }
     }
 }
 

@@ -3,6 +3,8 @@ package dev.scdeal.archiel
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -62,5 +64,25 @@ class ApiModelsTest {
         val command = part.state?.input?.get("command")
         assertEquals("echo hi", (command as? JsonPrimitive)?.contentOrNull)
         assertEquals("hi\n", part.state?.content?.firstOrNull()?.text)
+    }
+
+    @Test
+    fun `a patch tool part keeps its files metadata`() {
+        val row = """
+            {"type":"tool","id":"call-patch","name":"patch",
+             "state":{"status":"completed","input":{},
+                      "metadata":{"files":[{"file":"app/src/main/java/dev/scdeal/archiel/Theme.kt",
+                      "patch":"--- a/Theme.kt\n+++ b/Theme.kt\n@@ -1,1 +1,2 @@\n val x = 1\n+val y = 2\n",
+                      "additions":1,"deletions":0,"status":"modified"}]}}}
+        """.trimIndent()
+        val part = json.decodeFromString(Part.serializer(), row)
+        assertEquals("patch", part.name)
+        val files = part.state?.metadata?.get("files")?.jsonArray
+        assertEquals(1, files?.size)
+        val file = files?.first()?.jsonObject
+        assertEquals("app/src/main/java/dev/scdeal/archiel/Theme.kt", (file?.get("file") as? JsonPrimitive)?.contentOrNull)
+        assertEquals("modified", (file?.get("status") as? JsonPrimitive)?.contentOrNull)
+        assertEquals("1", (file?.get("additions") as? JsonPrimitive)?.contentOrNull)
+        assertEquals(true, (file?.get("patch") as? JsonPrimitive)?.contentOrNull?.contains("@@ -1,1 +1,2 @@"))
     }
 }

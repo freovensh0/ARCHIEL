@@ -40,6 +40,9 @@ private val Noir = darkColorScheme(
 val AccentFill = Color(0xFFE0A458)
 val OnAccent = Color(0xFF14110C)
 
+/** Added lines in a diff; muted so a whole file of green does not shout on `surface`. */
+val DiffAdd = Color(0xFF8FBF8F)
+
 private val Instrument = FontFamily(
     Font(R.font.instrument_sans, FontWeight.Normal),
     Font(R.font.instrument_sans, FontWeight.Medium),
