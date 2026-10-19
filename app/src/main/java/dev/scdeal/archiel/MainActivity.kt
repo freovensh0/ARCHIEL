@@ -185,7 +185,7 @@ private fun App() {
         Screen.Sessions -> SessionsScreen(
             state = state,
             address = vm.address,
-            onOpen = { vm.open(it); screen = Screen.Chat },
+            onOpen = { id, readOnly -> vm.open(id, readOnly); screen = Screen.Chat },
             onNew = { vm.newSession { screen = Screen.Chat } },
             onPreview = vm::preview,
             onRefresh = vm::refresh,
@@ -349,12 +349,12 @@ private fun LiveStrip(text: String, dot: Color) {
 }
 
 @Composable
-private fun Banner(text: String) {
+private fun Banner(text: String, dot: Color = MaterialTheme.colorScheme.error) {
     Row(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).padding(Space.l),
         verticalAlignment = Alignment.Top,
     ) {
-        LiveDot(MaterialTheme.colorScheme.error)
+        LiveDot(dot)
         Spacer(Modifier.width(Space.m))
         Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
     }
@@ -428,7 +428,7 @@ private fun sessionEntries(rows: List<SessionRowItem>, now: Long): List<SessionL
 private fun SessionsScreen(
     state: ChatState,
     address: String,
-    onOpen: (String) -> Unit,
+    onOpen: (String, Boolean) -> Unit,
     onNew: () -> Unit,
     onPreview: (String) -> Unit,
     onRefresh: () -> Unit,
@@ -508,13 +508,14 @@ private fun SessionsScreen(
                                     title = row.session.title?.takeIf { it.isNotBlank() } ?: "Subagent",
                                     agent = row.session.agent,
                                     stamp = stamp(row.session.time?.updated),
+                                    onClick = { onOpen(row.session.id, true) },
                                 )
                             } else {
                                 SessionRow(
                                     title = row.session.title?.takeIf { it.isNotBlank() } ?: "Untitled session",
                                     preview = state.previews[row.session.id],
                                     stamp = stamp(row.session.time?.updated),
-                                    onClick = { onOpen(row.session.id) },
+                                    onClick = { onOpen(row.session.id, false) },
                                     onPreview = { onPreview(row.session.id) },
                                 )
                             }
@@ -601,12 +602,13 @@ private fun SessionRow(title: String, preview: String?, stamp: String, onClick: 
     Hairline()
 }
 
-/** Subagents have no screen of their own: no tap, no preview. The indent and the word carry that, not a colour. */
+/** A subagent's transcript opens read-only: the indent and the word carry that, not a colour. */
 @Composable
-private fun ChildSessionRow(title: String, agent: String?, stamp: String) {
+private fun ChildSessionRow(title: String, agent: String?, stamp: String, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
+            .clickable(onClick = onClick)
             .heightIn(min = Size.row)
             .padding(start = Space.xl, top = Space.m, end = Space.l, bottom = Space.m),
         verticalAlignment = Alignment.Top,
@@ -786,21 +788,34 @@ private fun ChatScreen(
                 !state.agent.isNullOrBlank() -> state.agent
                 else -> null
             },
-            actions = listOf(
-                BarAction(Icons.Outlined.PlayArrow, "Run a command on the server", onShell),
-                BarAction(Icons.Outlined.Terminal, "Open the terminal", onTerminal),
-                BarAction(Icons.Outlined.Tune, "Switch model or agent", onOpenPickers),
-            ),
-            trailing = {
-                SessionMenu(
-                    onRename = { renaming = true },
-                    onFork = { onRunCommand("fork", "") },
-                    onCompact = { onRunCommand("compact", "") },
-                    onExport = onExport,
-                    onDelete = { confirmingDelete = true },
+            actions = if (state.readOnly) {
+                emptyList()
+            } else {
+                listOf(
+                    BarAction(Icons.Outlined.PlayArrow, "Run a command on the server", onShell),
+                    BarAction(Icons.Outlined.Terminal, "Open the terminal", onTerminal),
+                    BarAction(Icons.Outlined.Tune, "Switch model or agent", onOpenPickers),
                 )
             },
+            trailing = {
+                // Every item in the menu writes to the session, which a subagent's session does not allow.
+                if (!state.readOnly) {
+                    SessionMenu(
+                        onRename = { renaming = true },
+                        onFork = { onRunCommand("fork", "") },
+                        onCompact = { onRunCommand("compact", "") },
+                        onExport = onExport,
+                        onDelete = { confirmingDelete = true },
+                    )
+                }
+            },
         )
+        if (state.readOnly) {
+            Banner(
+                "This is a subagent's session. It runs on its own; you can read it but not write to it.",
+                dot = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         UsageStrip(state.usage, state.context)
         if (state.cutShort) {
             Banner("The stream ended before the answer finished. The text below is all the server sent.")
@@ -824,46 +839,52 @@ private fun ChatScreen(
         // Prompts keep the server order; the run waits on each one.
         // shortcut: they stack without their own scroll, which fits the usual one-or-two asks on a phone.
         Column(Modifier.fillMaxWidth()) {
-            state.permissions.forEach { request ->
-                PermissionCard(request, onReply = { decision -> onReplyPermission(request.id, decision) })
-            }
-            state.forms.forEach { form ->
-                FormCard(
-                    form = form,
-                    onSubmit = { answer -> onReplyForm(form.id, answer) },
-                    onDismiss = { onCancelForm(form.id) },
-                )
+            // A read-only session gets no cards: answering one would write into the subagent's session.
+            if (!state.readOnly) {
+                state.permissions.forEach { request ->
+                    PermissionCard(request, onReply = { decision -> onReplyPermission(request.id, decision) })
+                }
+                state.forms.forEach { form ->
+                    FormCard(
+                        form = form,
+                        onSubmit = { answer -> onReplyForm(form.id, answer) },
+                        onDismiss = { onCancelForm(form.id) },
+                    )
+                }
             }
         }
-        Dock(
-            input = state.draft,
-            onInput = onDraft,
-            busy = state.busy,
-            commands = state.commands,
-            model = state.model,
-            attachments = state.attachments,
-            mentions = state.mentions,
-            agents = state.agents,
-            files = state.fileMatches,
-            onAttach = onAttach,
-            onDetach = onDetach,
-            onMention = onMention,
-            onUnmention = onUnmention,
-            onAttachFile = onAttachFile,
-            onSend = {
-                val text = state.draft.trim()
-                if (text.startsWith("/")) {
-                    val name = text.removePrefix("/").substringBefore(' ')
-                    onRunCommand(name, text.removePrefix("/$name").trim())
-                    // The dock owns the field, so a typed command clears it; the menu reuses
-                    // runCommand without meaning to touch a draft the user is writing.
-                    onDraft("")
-                } else {
-                    onSend(state.draft)
-                }
-            },
-            onStop = onStop,
-        )
+        // The dock is the write surface; a subagent's session has none.
+        if (!state.readOnly) {
+            Dock(
+                input = state.draft,
+                onInput = onDraft,
+                busy = state.busy,
+                commands = state.commands,
+                model = state.model,
+                attachments = state.attachments,
+                mentions = state.mentions,
+                agents = state.agents,
+                files = state.fileMatches,
+                onAttach = onAttach,
+                onDetach = onDetach,
+                onMention = onMention,
+                onUnmention = onUnmention,
+                onAttachFile = onAttachFile,
+                onSend = {
+                    val text = state.draft.trim()
+                    if (text.startsWith("/")) {
+                        val name = text.removePrefix("/").substringBefore(' ')
+                        onRunCommand(name, text.removePrefix("/$name").trim())
+                        // The dock owns the field, so a typed command clears it; the menu reuses
+                        // runCommand without meaning to touch a draft the user is writing.
+                        onDraft("")
+                    } else {
+                        onSend(state.draft)
+                    }
+                },
+                onStop = onStop,
+            )
+        }
     }
 
     if (renaming) {

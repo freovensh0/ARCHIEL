@@ -62,6 +62,8 @@ data class ChatState(
     val defaultAgent: String? = null,
     val previews: Map<String, String> = emptyMap(),
     val sessionId: String? = null,
+    /** A subagent's session: the user may read it, but it belongs to the agent that spawned it. */
+    val readOnly: Boolean = false,
     val title: String? = null,
     val location: String? = null,
     val messages: List<Message> = emptyList(),
@@ -348,6 +350,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun replyPermission(requestID: String, decision: String) {
+        if (_state.value.readOnly) return
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
             runCatching { client.replyPermission(id, requestID, decision) }
@@ -358,6 +361,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun replyForm(formID: String, answer: JsonObject) {
+        if (_state.value.readOnly) return
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
             runCatching { client.replyForm(id, formID, answer) }
@@ -369,6 +373,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun cancelForm(formID: String) {
+        if (_state.value.readOnly) return
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
             runCatching { client.cancelForm(id, formID) }
@@ -444,6 +449,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun runCommand(name: String, arguments: String) {
+        if (_state.value.readOnly) return
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
             if (name in builtins.map { it.name }) {
@@ -542,11 +548,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun open(id: String) {
+    fun open(id: String, readOnly: Boolean = false) {
         val existing = _state.value.sessions.firstOrNull { s -> s.id == id }
         _state.update {
             it.copy(
                 sessionId = id,
+                readOnly = readOnly,
                 model = existing?.model?.label(),
                 agent = existing?.agent,
                 location = existing?.location?.directory,
@@ -587,7 +594,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         ptyId = null
         if (pty != null) viewModelScope.launch { runCatching { client.deletePty(pty) } }
         _state.update {
-            it.copy(sessionId = null, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", attachments = emptyList(), mentions = emptyList(), shareUri = null, usage = null, context = null, shell = null, shellBusy = false, pty = null, ptyBusy = false)
+            it.copy(sessionId = null, readOnly = false, messages = emptyList(), queuedId = null, stream = "", thinking = "", tools = emptyList(), busy = false, cutShort = false, permissions = emptyList(), forms = emptyList(), draft = "", attachments = emptyList(), mentions = emptyList(), shareUri = null, usage = null, context = null, shell = null, shellBusy = false, pty = null, ptyBusy = false)
         }
     }
 
@@ -638,6 +645,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Persists every keystroke; the strings are tiny and `apply()` writes off the main thread. */
     fun draft(text: String) {
+        if (_state.value.readOnly) return
         val id = _state.value.sessionId ?: return
         _state.update { it.copy(draft = text) }
         drafts.edit().putString(id, text).apply()
@@ -734,6 +742,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun clearAttachments() = _state.update { it.copy(attachments = emptyList()) }
 
     fun send(text: String) {
+        if (_state.value.readOnly) return
         val body = text.trim()
         val id = _state.value.sessionId ?: return
         if (body.isEmpty()) return
