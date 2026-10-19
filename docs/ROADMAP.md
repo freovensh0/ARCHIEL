@@ -24,7 +24,7 @@ runtime).
 
 ## Phase 1 — chat hygiene
 
-- Stop button while generating (`POST /session/{id}/abort`), disabled state
+- Stop button while generating (`POST /session/{id}/interrupt`), disabled state
   when idle.
 - Queued prompt: an outgoing message stays visible with a "queued" label until
   the user message part confirms arrival.
