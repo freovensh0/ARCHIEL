@@ -49,6 +49,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Refresh
@@ -82,6 +84,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -1004,6 +1007,9 @@ private fun ToolBlock(part: Part) {
     val command = (part.state?.input?.get("command") as? JsonPrimitive)?.contentOrNull
     val output = part.state?.content.orEmpty().mapNotNull { it.text }.joinToString("\n")
     val files = patchFiles(part.state)
+    val todos = part.name?.lowercase()?.let { name ->
+        if (name == "todowrite" || name == "todo" || name == "plan") todoItems(part.state?.input) else null
+    }
     var open by remember { mutableStateOf(false) }
     Column(
         Modifier
@@ -1059,6 +1065,10 @@ private fun ToolBlock(part: Part) {
                 )
             }
         }
+        if (!todos.isNullOrEmpty()) {
+            Spacer(Modifier.height(Space.s))
+            TodoPanel(todos)
+        }
         if (open) {
             if (files.isNotEmpty()) {
                 files.forEachIndexed { index, file ->
@@ -1113,6 +1123,66 @@ private fun patchFiles(state: PartState?): List<PatchFile> =
         val patch = row.str("patch") ?: return@mapNotNull null
         PatchFile(file, patch, row.str("status"), row.str("additions"), row.str("deletions"))
     }
+
+/**
+ * The `todowrite`/`plan` input as (content, status) pairs, or null when the input is not a todo
+ * list. The server has no builtin todo tool in v2.0.32; a list can only arrive from a plugin or an
+ * MCP server, which is why the shape is probed rather than typed.
+ */
+internal fun todoItems(input: JsonObject?): List<Pair<String, String>>? {
+    val rows = input?.get("todos") as? JsonArray ?: input?.get("entries") as? JsonArray ?: return null
+    val items = rows.mapNotNull { element ->
+        val row = element as? JsonObject ?: return@mapNotNull null
+        val content = row.str("content")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        val status = row.str("status")
+        content to if (status == "completed" || status == "in_progress") status else "pending"
+    }
+    return items.ifEmpty { null }
+}
+
+/** Stays visible without expanding the card: the whole point is the list at a glance. */
+@Composable
+private fun TodoPanel(items: List<Pair<String, String>>) {
+    Column(Modifier.fillMaxWidth()) {
+        items.forEachIndexed { index, (content, status) ->
+            if (index > 0) Spacer(Modifier.height(Space.xs))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = Space.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    if (status == "completed") Icons.Outlined.CheckBox else Icons.Outlined.CheckBoxOutlineBlank,
+                    contentDescription = status,
+                    tint = when (status) {
+                        "completed" -> AccentFill
+                        "in_progress" -> MaterialTheme.colorScheme.onSurface
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(Space.s))
+                Text(
+                    content,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        textDecoration = if (status == "completed") TextDecoration.LineThrough else null,
+                    ),
+                    color = if (status == "completed") {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                if (status == "in_progress") {
+                    Spacer(Modifier.width(Space.s))
+                    Text("doing", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun PatchFileBlock(file: PatchFile) {

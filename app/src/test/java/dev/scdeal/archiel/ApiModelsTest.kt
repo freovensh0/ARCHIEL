@@ -1,6 +1,7 @@
 package dev.scdeal.archiel
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -126,5 +127,30 @@ class ApiModelsTest {
         assertEquals("modified", (file?.get("status") as? JsonPrimitive)?.contentOrNull)
         assertEquals("1", (file?.get("additions") as? JsonPrimitive)?.contentOrNull)
         assertEquals(true, (file?.get("patch") as? JsonPrimitive)?.contentOrNull?.contains("@@ -1,1 +1,2 @@"))
+    }
+
+    @Test
+    fun `a todo tool input yields its items in order with their status`() {
+        val input = json.decodeFromString(
+            JsonObject.serializer(),
+            """{"todos":[{"content":"Read the roadmap","status":"completed","priority":"high"},
+                         {"content":"Render the panel","status":"in_progress"}]}""",
+        )
+        assertEquals(
+            listOf("Read the roadmap" to "completed", "Render the panel" to "in_progress"),
+            todoItems(input),
+        )
+    }
+
+    @Test
+    fun `an older plan input reads entries and defaults a missing status`() {
+        val input = json.decodeFromString(JsonObject.serializer(), """{"entries":[{"content":"Ship it"}]}""")
+        assertEquals(listOf("Ship it" to "pending"), todoItems(input))
+    }
+
+    @Test
+    fun `a non-todo input has no items`() {
+        val input = json.decodeFromString(JsonObject.serializer(), """{"command":"ls"}""")
+        assertEquals(null, todoItems(input))
     }
 }
