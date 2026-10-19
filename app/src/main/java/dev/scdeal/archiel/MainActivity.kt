@@ -1,5 +1,7 @@
 package dev.scdeal.archiel
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -47,6 +49,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
@@ -716,9 +719,11 @@ private fun Caret() {
 
 @Composable
 private fun ToolBlock(part: Part) {
+    val ctx = LocalContext.current
     val status = part.state?.status ?: "running"
     val command = (part.state?.input?.get("command") as? JsonPrimitive)?.contentOrNull
     val output = part.state?.content.orEmpty().mapNotNull { it.text }.joinToString("\n")
+    var open by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -728,7 +733,13 @@ private fun ToolBlock(part: Part) {
             .border(Size.hairline, MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.chip))
             .padding(Space.m),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(Radius.chip))
+                .clickable { open = !open },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             LiveDot(
                 when (status) {
                     "completed" -> AccentFill
@@ -737,30 +748,58 @@ private fun ToolBlock(part: Part) {
                 }
             )
             Spacer(Modifier.width(Space.s))
-            Text("${part.name ?: "tool"} · $status", style = MaterialTheme.typography.labelSmall)
-        }
-        if (command != null) {
-            Spacer(Modifier.height(Space.s))
-            SelectionContainer {
-                Text(
-                    "\$ $command",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
-                    color = MaterialTheme.colorScheme.onSurface,
+            Text(
+                "${part.name ?: "tool"} · $status",
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.weight(1f),
+            )
+            // Its own clickable consumes the tap, so copying never toggles the body.
+            Box(
+                Modifier
+                    .size(Size.hitSmall)
+                    .clip(RoundedCornerShape(Radius.chip))
+                    .clickable {
+                        val text = listOfNotNull(
+                            command?.takeIf { it.isNotBlank() },
+                            output.takeIf { it.isNotBlank() },
+                        ).joinToString("\n\n")
+                        if (text.isNotEmpty()) {
+                            val clipboard = ctx.getSystemService(ClipboardManager::class.java)
+                            clipboard?.setPrimaryClip(ClipData.newPlainText("Tool call", text))
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Outlined.ContentCopy,
+                    contentDescription = "Copy command and output",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }
-        if (output.isNotBlank()) {
-            Spacer(Modifier.height(Space.s))
-            Hairline()
-            Spacer(Modifier.height(Space.s))
-            SelectionContainer {
-                Text(
-                    output,
-                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 8,
-                    overflow = TextOverflow.Ellipsis,
-                )
+        if (open) {
+            if (command != null) {
+                Spacer(Modifier.height(Space.s))
+                SelectionContainer {
+                    Text(
+                        "\$ $command",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+            if (output.isNotBlank()) {
+                Spacer(Modifier.height(Space.s))
+                Hairline()
+                Spacer(Modifier.height(Space.s))
+                SelectionContainer {
+                    Text(
+                        output,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }
