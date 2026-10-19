@@ -21,15 +21,10 @@ runtime).
 - Sessions, models, streaming answer with live reasoning strip and tool blocks
 - GFM markdown: fences, headings, nested lists, tasks, quotes, tables,
   rules, inline code, bold, italics, strikes, clickable links
-
-## Phase 1 — chat hygiene
-
-- Stop button while generating (`POST /session/{id}/interrupt`), disabled state
-  when idle.
-- Queued prompt: an outgoing message stays visible with a "queued" label until
-  the user message part confirms arrival.
-- Error state of a turn reads as a sentence with a Retry action.
-- Tool cards expandable with a copy button for command + output.
+- Chat hygiene: stop button while generating (`POST /session/{id}/interrupt`)
+  with a disabled state when idle, queued label on an outgoing prompt until the
+  run confirms it, turn errors as a sentence with Retry, tool cards expandable
+  with a copy button for command + output
 
 ## Phase 2 — the agent's artifacts
 
