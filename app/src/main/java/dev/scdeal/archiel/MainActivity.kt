@@ -685,7 +685,12 @@ private fun ChatScreen(
         TopBar(
             title = state.title?.takeIf { it.isNotBlank() } ?: "Chat",
             onBack = onBack,
-            status = if (state.busy) "working" else null,
+            // The busy state wins; when idle the slot names the agent running the session.
+            status = when {
+                state.busy -> "working"
+                !state.agent.isNullOrBlank() -> state.agent
+                else -> null
+            },
             actions = listOf(
                 BarAction(Icons.Outlined.Tune, "Switch model or agent", onOpenPickers),
             ),
@@ -1742,6 +1747,10 @@ private fun PickerScreen(
     val favorites = all.filter { modelKey(it) in state.favorites }
     val hidden = all.filter { modelKey(it) in state.hidden }
     val rest = all.filterNot { modelKey(it) in state.favorites || modelKey(it) in state.hidden }.take(80)
+    // A hidden agent is not meant to be listed; primaries read first, subagents in their own group.
+    val agents = state.agents.filter { it.hidden != true }
+    val primaries = agents.filter { it.mode != "subagent" }
+    val subagents = agents.filter { it.mode == "subagent" }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopBar(title = "Model and agent", onBack = onBack)
@@ -1777,16 +1786,16 @@ private fun PickerScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.m),
         )
         LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-            if (query.isEmpty()) {
+            if (query.isEmpty() && primaries.isNotEmpty()) {
                 item("agents") { SectionLabel("AGENT") }
-                items(state.agents, key = { "agent-${it.id}" }) { agent ->
-                    PickerRow(
-                        title = agent.name,
-                        detail = agent.mode ?: "primary",
-                        selected = state.agent == agent.id,
-                        mono = false,
-                        onClick = { onPickAgent(agent.id) },
-                    )
+                items(primaries, key = { "agent-${it.id}" }) { agent ->
+                    AgentRow(agent = agent, selected = state.agent == agent.id, onClick = { onPickAgent(agent.id) })
+                }
+            }
+            if (query.isEmpty() && subagents.isNotEmpty()) {
+                item("subagents") { SectionLabel("SUBAGENT") }
+                items(subagents, key = { "subagent-${it.id}" }) { agent ->
+                    AgentRow(agent = agent, selected = state.agent == agent.id, onClick = { onPickAgent(agent.id) })
                 }
             }
             if (favorites.isNotEmpty()) {
@@ -1992,6 +2001,18 @@ private fun PickerRow(title: String, detail: String, selected: Boolean, mono: Bo
         }
     }
     Hairline()
+}
+
+/** The server's own sentence reads better than the mode; the mode is the fallback when it has none. */
+@Composable
+private fun AgentRow(agent: AgentInfo, selected: Boolean, onClick: () -> Unit) {
+    PickerRow(
+        title = agent.name,
+        detail = agent.description?.takeIf { it.isNotBlank() } ?: agent.mode ?: "primary",
+        selected = selected,
+        mono = false,
+        onClick = onClick,
+    )
 }
 
 // ------------------------------------------------------------------ connection

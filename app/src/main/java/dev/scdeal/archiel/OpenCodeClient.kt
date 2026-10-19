@@ -106,7 +106,7 @@ data class PartState(
 data class PartText(val type: String? = null, val text: String? = null)
 
 @Serializable
-data class AgentInfo(val id: String, val name: String, val mode: String? = null, val description: String? = null)
+data class AgentInfo(val id: String, val name: String, val mode: String? = null, val description: String? = null, val hidden: Boolean = false)
 
 // `cost` arrives as an array and nothing reads it, so it stays out of the model rather than making
 // the whole list undecodable.

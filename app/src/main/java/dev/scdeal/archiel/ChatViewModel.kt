@@ -337,7 +337,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
             runCatching { client.setAgent(id, agent) }
-                .onSuccess { _state.update { it.copy(agent = agent) } }
+                .onSuccess {
+                    _state.update {
+                        it.copy(
+                            agent = agent,
+                            // Keep the row in step so the pick survives leaving the chat and coming back.
+                            sessions = it.sessions.map { s -> if (s.id == id) s.copy(agent = agent) else s },
+                        )
+                    }
+                }
                 .onFailure { e -> fail("Could not switch the agent: ${e.message}") }
         }
     }

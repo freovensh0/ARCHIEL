@@ -204,6 +204,21 @@ class ApiModelsTest {
     }
 
     @Test
+    fun `an agent row decodes its mode and hidden flag`() {
+        val row = """
+            {"id":"explore","name":"Explore","mode":"subagent","description":"Search the codebase.",
+             "hidden":true,"model":null,"permissions":{},"steps":0}
+        """.trimIndent()
+        val agent = json.decodeFromString(AgentInfo.serializer(), row)
+        assertEquals("explore", agent.id)
+        assertEquals("subagent", agent.mode)
+        assertEquals("Search the codebase.", agent.description)
+        assertEquals(true, agent.hidden)
+        // Older servers omit the field, so a bare row must stay visible.
+        assertEquals(false, json.decodeFromString(AgentInfo.serializer(), """{"id":"build","name":"Build"}""").hidden)
+    }
+
+    @Test
     fun `a non-todo input has no items`() {
         val input = json.decodeFromString(JsonObject.serializer(), """{"command":"ls"}""")
         assertEquals(null, todoItems(input))
