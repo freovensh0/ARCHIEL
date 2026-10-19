@@ -737,6 +737,35 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             .onFailure { e -> fail(e.message ?: "The file could not be read.") }
     }
 
+    /**
+     * A file or text handed over by another app: it waits in the dock of the open session, or of a new
+     * one when there is none, so the next prompt carries it.
+     */
+    fun share(uris: List<Uri>, text: String, onReady: () -> Unit) {
+        val body = text.trim()
+        if (uris.isEmpty() && body.isEmpty()) return
+        val current = _state.value
+        // A subagent's session cannot take a prompt, so a share there opens a session of its own.
+        if (current.sessionId == null || current.readOnly) {
+            newSession {
+                attachShared(uris, body)
+                onReady()
+            }
+        } else {
+            attachShared(uris, body)
+            onReady()
+        }
+    }
+
+    /** `open()` clears the dock, so a new session takes the share after it opens, not before. */
+    private fun attachShared(uris: List<Uri>, text: String) {
+        uris.forEach { attach(it) }
+        if (text.isEmpty()) return
+        // Keep what the user already typed; the shared text lands under it rather than replacing it.
+        val typed = _state.value.draft
+        draft(if (typed.isBlank()) text else "$typed\n\n$text")
+    }
+
     fun detach(name: String) = _state.update { it.copy(attachments = it.attachments.filterNot { a -> a.name == name }) }
 
     fun clearAttachments() = _state.update { it.copy(attachments = emptyList()) }

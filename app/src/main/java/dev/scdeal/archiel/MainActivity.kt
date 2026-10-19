@@ -125,6 +125,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.IntentCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -141,10 +142,21 @@ import java.util.Locale
 private val Transparent = Color.Transparent
 
 class MainActivity : ComponentActivity() {
+    /** A share the activity still has to hand over: the view model only exists inside the composition. */
+    private var shared by mutableStateOf<Intent?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        setContent { ArchielTheme { App() } }
+        // A rotation recreates the activity with the same intent; only a cold start is a new share.
+        if (savedInstanceState == null) shared = intent?.takeIf { it.action == Intent.ACTION_SEND }
+        setContent { ArchielTheme { App(shared = shared, onShared = { shared = null }) } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        shared = intent.takeIf { it.action == Intent.ACTION_SEND }
     }
 }
 
@@ -155,8 +167,15 @@ private enum class PickerMode { Session, DefaultModel, DefaultAgent }
 
 private typealias BarAction = Triple<ImageVector, String, () -> Unit>
 
+/** The files a share carries: every clip item, otherwise the single stream. */
+private fun sharedUris(intent: Intent): List<Uri> {
+    val clip = intent.clipData
+    if (clip != null && clip.itemCount > 0) return (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }
+    return listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
+}
+
 @Composable
-private fun App() {
+private fun App(shared: Intent?, onShared: () -> Unit) {
     val ctx = LocalContext.current
     var cfg by remember { mutableStateOf(Cfg.load(ctx)) }
     var screen by rememberSaveable { mutableStateOf(Screen.Sessions) }
@@ -164,6 +183,18 @@ private fun App() {
     val vm: ChatViewModel = viewModel(key = "${cfg.baseUrl}|${cfg.password}")
     val state by vm.state.collectAsState()
     val canRetry by vm.canRetry.collectAsState()
+
+    // The share arrives outside the composition, so it is handed over once and then cleared.
+    LaunchedEffect(shared) {
+        val intent = shared ?: return@LaunchedEffect
+        val uris = sharedUris(intent)
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }
+        if (uris.isNotEmpty() || text != null) {
+            // The chat opens once the session that carries the share exists.
+            vm.share(uris, text.orEmpty()) { screen = Screen.Chat }
+        }
+        onShared()
+    }
 
     // Both entry points fetch the picker lists the first time they are needed.
     val openPicker: (PickerMode) -> Unit = { mode -> vm.loadPickers(); pickerMode = mode; screen = Screen.Pickers }
