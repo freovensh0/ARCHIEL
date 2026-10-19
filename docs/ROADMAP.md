@@ -25,14 +25,10 @@ runtime).
   with a disabled state when idle, queued label on an outgoing prompt until the
   run confirms it, turn errors as a sentence with Retry, tool cards expandable
   with a copy button for command + output
-
-## Phase 2 — the agent's artifacts
-
-- Patch/diff part rendering: add/remove lines coloured, file header with copy.
-- Todo part rendered as a compact panel with checked states.
-- Permission and question prompts (server-initiated) as ordered inline cards:
-  answer, approve, deny.
-- Child/subagent sessions listed read-only under their parent.
+- The agent's artifacts: patch tool diffs with a per-file header and copy,
+  todo tool input as a compact checked panel, pending permissions and
+  `question` forms as ordered inline cards (answer, approve, deny), subagent
+  sessions listed read-only under their parent
 
 ## Phase 3 — session management
 

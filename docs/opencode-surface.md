@@ -39,6 +39,7 @@ the password is what `opencode serve` prints at startup.
 | Sessions | `GET /session` | Cursor paginated, `limit`, `search`, `order` |
 | Messages | `GET /session/{id}/message` | `limit`, `order`, `type` |
 | Pending permissions | `GET /session/{id}/permission`, `GET /permission/request` | |
+| Pending forms | `GET /session/{id}/form`, `GET /form` | Pending only: `{data: [Form.Info]}` |
 | Saved approvals | `GET /permission/saved` | Durable, project scoped `allow` rules |
 | Session usage | `GET /session/{id}/context` | |
 | Session diff | `GET /session/{id}/diff` | |
@@ -62,6 +63,8 @@ filters by `sessionID`. The names ARCHIEL acts on today:
 | `session.step.started` / `.streamed` / `.ended` | A step inside a run |
 | `session.inbox.enqueued` / `.delivered` | Prompt queueing |
 | `session.usage.updated` | Token and cost counters |
+| `permission.asked` / `.replied` | A run hit `ask`; the request is ephemeral, so poll on reconnect |
+| `form.created` / `.replied` / `.cancelled` | A `question` form was asked or settled |
 
 There is no replay: a reconnect starts from `server.connected` and the client reloads messages.
 
@@ -87,6 +90,21 @@ run hits `ask`, the client sees a `Permission.Request` (`id`, `action`, `resourc
 
 **This is why the app needs the permission card:** without it a run that hits `ask` waits forever.
 
+## Questions and forms
+
+The `question` tool does not create a message part: it opens a `Form.Info` (`id`, `sessionID`,
+`title`, `fields`), listed by `GET /session/{id}/form` while pending and answered with
+`POST /session/{id}/form/{formID}/reply` (`{answer: {q0: "label" | ["a","b"]}}`); `DELETE` on the
+same path dismisses it. Fields carry `key`, `title`, `description`, `type` (`string`, `multiselect`,
+number, integer, boolean, external), `options` and `custom` for free text. A run blocks on an open
+form just like on a permission ask.
+
+## Todos
+
+v2.0.32 has no builtin todo tool: the `todowrite` name was retired along with the todo part. A list
+only reaches the client from an MCP server or a plugin, as the input of a `todowrite`/`plan` tool
+call (`{todos: [{content, status, priority?}]}`), which is what ARCHIEL renders.
+
 ## The TUI slash palette is not /api/command
 
 The official TUI keeps a second command set that is never registered on the server: `/pair`
@@ -101,6 +119,6 @@ the `/pair`, `/restart`, `/themes`, `/status` ones stay TUI-only on purpose.
 ## What ARCHIEL does not use yet
 
 PTY terminals, voice sessions, worktrees, VCS actions, plugin RPC, credentials and integrations,
-forms beyond a plain question, and file attachments: the `prompt` body only takes a `uri`, and the
-opencode server usually runs in Termux on the same phone, where an Android `content://` URI is not
-readable without a copy into shared storage first.
+form field types beyond a question (a plain `question` form is answered), and file attachments: the
+`prompt` body only takes a `uri`, and the opencode server usually runs in Termux on the same phone,
+where an Android `content://` URI is not readable without a copy into shared storage first.
