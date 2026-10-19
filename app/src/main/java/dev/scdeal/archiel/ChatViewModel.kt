@@ -3,6 +3,7 @@ package dev.scdeal.archiel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,8 +44,12 @@ data class ChatState(    val sessions: List<Session> = emptyList(),
     val online: Boolean? = null,
     val latencyMs: Long? = null,
     val serverVersion: String? = null,
+    /** The sessions-screen title filter; it is not part of opening a session, so `open()` leaves it alone. */
+    val search: String = "",
     val error: String? = null,
 )
+
+private const val SEARCH_DEBOUNCE_MS = 250L
 
 /** The session commands the TUI keeps out of /api/command and runs itself; we do the same here. */
 val builtins = listOf(
@@ -69,6 +74,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** What Retry re-runs; null means the current sentence has nothing worth replaying. */
     private var retryAction: (() -> Unit)? = null
+
+    /** The in-flight debounce for the sessions search, so typing cancels the request before it fires. */
+    private var searchJob: Job? = null
+
     private val _canRetry = MutableStateFlow(false)
     val canRetry: StateFlow<Boolean> = _canRetry.asStateFlow()
 
@@ -311,7 +320,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val started = System.currentTimeMillis()
         runCatching {
             val info = client.info()
-            val list = client.sessions()
+            val list = client.sessions(_state.value.search)
             info to list
         }.onSuccess { (info, list) ->
             _state.update {
@@ -327,6 +336,29 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }.onFailure { e ->
             _state.update { it.copy(loading = false, online = false) }
             fail("The server is not answering: ${e.message}")
+        }
+    }
+
+    /**
+     * The sessions-screen title filter: show the query at once, then fetch it server side after a
+     * pause so a fast typist sends one request, not one per keystroke.
+     */
+    fun search(query: String) {
+        _state.update { it.copy(search = query) }
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            delay(SEARCH_DEBOUNCE_MS)
+            val list = try {
+                client.sessions(query)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A blank query failing is the ordinary offline case refresh() already reports.
+                if (query.isNotBlank() && _state.value.search == query) fail("Could not search sessions: ${e.message}")
+                return@launch
+            }
+            // A slow earlier response must not overwrite a newer query's result.
+            if (_state.value.search == query) _state.update { it.copy(sessions = list, online = true, error = null) }
         }
     }
 

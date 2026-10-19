@@ -261,8 +261,10 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
         call("POST", "/api/session/$sessionID/command", body.toString())
     }
 
-    suspend fun sessions(): List<Session> =
-        json.decodeFromString(Data.serializer(Session.serializer()), call("GET", "/api/session?limit=50")).data
+    suspend fun sessions(search: String? = null): List<Session> {
+        val query = search?.takeIf { it.isNotBlank() }?.let { "&search=" + URLEncoder.encode(it, "UTF-8") }.orEmpty()
+        return json.decodeFromString(Data.serializer(Session.serializer()), call("GET", "/api/session?limit=50$query")).data
+    }
 
     suspend fun createSession(): Session =
         json.decodeFromString(One.serializer(Session.serializer()), call("POST", "/api/session")).data

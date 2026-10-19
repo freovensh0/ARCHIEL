@@ -52,6 +52,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.MoreVert
@@ -138,6 +139,7 @@ private fun App() {
             onNew = { vm.newSession { screen = Screen.Chat } },
             onPreview = vm::preview,
             onRefresh = vm::refresh,
+            onSearch = vm::search,
             onSettings = { screen = Screen.Connection },
         )
 
@@ -270,7 +272,7 @@ private fun Banner(text: String) {
 // ------------------------------------------------------------------ sessions
 
 /** A display row: a root session keeps its tap and preview; a subagent is read-only under it. */
-private data class SessionRowItem(val session: Session, val child: Boolean)
+private data class SessionRowItem(val session: Session, val child: Boolean, val startsGroup: Boolean = true)
 
 /** Server order, each root immediately followed by its subagents. An orphan stays where the server put it. */
 private fun sessionRows(sessions: List<Session>): List<SessionRowItem> {
@@ -278,14 +280,54 @@ private fun sessionRows(sessions: List<Session>): List<SessionRowItem> {
     val children = sessions.filter { it.parentID != null }.groupBy { it.parentID }
     val out = ArrayList<SessionRowItem>(sessions.size)
     val placed = HashSet<String>()
-    fun add(session: Session, child: Boolean) {
+    fun add(session: Session, child: Boolean, startsGroup: Boolean) {
         if (!placed.add(session.id)) return
-        out += SessionRowItem(session, child)
-        children[session.id]?.forEach { add(it, true) }
+        out += SessionRowItem(session, child, startsGroup)
+        children[session.id]?.forEach { add(it, true, false) }
     }
     for (session in sessions) {
         if (session.parentID != null && session.parentID in ids) continue
-        add(session, session.parentID != null)
+        add(session, session.parentID != null, true)
+    }
+    return out
+}
+
+/** The time buckets the sessions list is read in; a missing timestamp counts as the oldest. */
+private enum class SessionGroup(val key: String, val label: String) {
+    Today("today", "Today"),
+    ThisWeek("week", "This week"),
+    Older("older", "Older"),
+}
+
+private const val WEEK_MS = 7L * 24 * 60 * 60 * 1000
+
+private fun sessionGroup(updated: Long, now: Long): SessionGroup {
+    if (updated <= 0L) return SessionGroup.Older
+    val day = SimpleDateFormat("yyyyMMdd", Locale.getDefault())
+    if (day.format(Date(now)) == day.format(Date(updated))) return SessionGroup.Today
+    return if (now - updated < WEEK_MS) SessionGroup.ThisWeek else SessionGroup.Older
+}
+
+/** A header, or a row that keeps its parent-then-subagents order. */
+private sealed interface SessionListEntry {
+    data class Header(val group: SessionGroup) : SessionListEntry
+    data class Item(val row: SessionRowItem) : SessionListEntry
+}
+
+/** Headers are driven by the root session's time; subagents keep following their parent. */
+private fun sessionEntries(rows: List<SessionRowItem>, now: Long): List<SessionListEntry> {
+    val out = ArrayList<SessionListEntry>(rows.size + 3)
+    var current: SessionGroup? = null
+    for (row in rows) {
+        // A subagent reads inside its parent's bucket; an orphan opens its own because it has none.
+        if (row.startsGroup) {
+            val group = sessionGroup(row.session.time?.updated ?: 0L, now)
+            if (group != current) {
+                out += SessionListEntry.Header(group)
+                current = group
+            }
+        }
+        out += SessionListEntry.Item(row)
     }
     return out
 }
@@ -298,6 +340,7 @@ private fun SessionsScreen(
     onNew: () -> Unit,
     onPreview: (String) -> Unit,
     onRefresh: () -> Unit,
+    onSearch: (String) -> Unit,
     onSettings: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -316,12 +359,22 @@ private fun SessionsScreen(
             },
             dot = if (state.online == true) AccentFill else MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Box(Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.m)) {
+            FormTextField(
+                value = state.search,
+                placeholder = "Search sessions",
+                onValue = onSearch,
+                singleLine = true,
+                trailing = if (state.search.isNotBlank()) ({ ClearSearchButton { onSearch("") } }) else null,
+            )
+        }
 
-        val rows = remember(state.sessions) { sessionRows(state.sessions) }
+        val entries = remember(state.sessions) { sessionEntries(sessionRows(state.sessions), System.currentTimeMillis()) }
 
         when {
             state.sessions.isEmpty() && state.online == false -> OfflineState(address, onRefresh)
             state.sessions.isEmpty() && state.loading -> LoadingRows()
+            state.sessions.isEmpty() && state.search.isNotBlank() -> NoMatchesRow(state.search)
             state.sessions.isEmpty() -> EmptyState(address)
             else -> LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
                 item("new") {
@@ -348,25 +401,78 @@ private fun SessionsScreen(
                     }
                     Hairline()
                 }
-                items(rows, key = { if (it.child) "subagent:${it.session.id}" else it.session.id }) { row ->
-                    if (row.child) {
-                        ChildSessionRow(
-                            title = row.session.title?.takeIf { it.isNotBlank() } ?: "Subagent",
-                            agent = row.session.agent,
-                            stamp = stamp(row.session.time?.updated),
-                        )
-                    } else {
-                        SessionRow(
-                            title = row.session.title?.takeIf { it.isNotBlank() } ?: "Untitled session",
-                            preview = state.previews[row.session.id],
-                            stamp = stamp(row.session.time?.updated),
-                            onClick = { onOpen(row.session.id) },
-                            onPreview = { onPreview(row.session.id) },
-                        )
+                items(entries, key = { entry ->
+                    when (entry) {
+                        is SessionListEntry.Header -> "group:${entry.group.key}"
+                        is SessionListEntry.Item -> if (entry.row.child) "subagent:${entry.row.session.id}" else entry.row.session.id
+                    }
+                }) { entry ->
+                    when (entry) {
+                        is SessionListEntry.Header -> GroupHeader(entry.group.label)
+                        is SessionListEntry.Item -> {
+                            val row = entry.row
+                            if (row.child) {
+                                ChildSessionRow(
+                                    title = row.session.title?.takeIf { it.isNotBlank() } ?: "Subagent",
+                                    agent = row.session.agent,
+                                    stamp = stamp(row.session.time?.updated),
+                                )
+                            } else {
+                                SessionRow(
+                                    title = row.session.title?.takeIf { it.isNotBlank() } ?: "Untitled session",
+                                    preview = state.previews[row.session.id],
+                                    stamp = stamp(row.session.time?.updated),
+                                    onClick = { onOpen(row.session.id) },
+                                    onPreview = { onPreview(row.session.id) },
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun GroupHeader(label: String) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(start = Space.l, end = Space.l, top = Space.m),
+    )
+}
+
+@Composable
+private fun ClearSearchButton(onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(Size.hitSmall)
+            .clip(RoundedCornerShape(Radius.chip))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            Icons.Outlined.Close,
+            "Clear search",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
+private fun NoMatchesRow(query: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.m),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "No sessions match \"$query\".",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -916,7 +1022,13 @@ private fun FormOptionRow(option: FormOption, selected: Boolean, onClick: () -> 
 }
 
 @Composable
-private fun FormTextField(value: String, placeholder: String, onValue: (String) -> Unit) {
+private fun FormTextField(
+    value: String,
+    placeholder: String,
+    onValue: (String) -> Unit,
+    singleLine: Boolean = false,
+    trailing: (@Composable () -> Unit)? = null,
+) {
     TextField(
         value = value,
         onValueChange = onValue,
@@ -929,7 +1041,9 @@ private fun FormTextField(value: String, placeholder: String, onValue: (String) 
         },
         textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
         shape = RoundedCornerShape(Radius.chip),
-        maxLines = 3,
+        maxLines = if (singleLine) 1 else 3,
+        singleLine = singleLine,
+        trailingIcon = trailing,
         colors = TextFieldDefaults.colors(
             focusedContainerColor = MaterialTheme.colorScheme.surface,
             unfocusedContainerColor = MaterialTheme.colorScheme.surface,
