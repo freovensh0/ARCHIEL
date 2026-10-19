@@ -1,5 +1,6 @@
 package dev.scdeal.archiel
 
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -378,5 +379,21 @@ class ApiModelsTest {
         // An OSC title is a sequence too, and the text after it stays.
         assertEquals("build done", stripAnsi("\u001B]0;make\u0007build done"))
         assertEquals("plain text", stripAnsi("plain text"))
+    }
+
+    // Cfg reads and writes a Context, which a plain JVM test has none of; this covers the stored shape.
+    @Test
+    fun `a profile list round trips through the serializer`() {
+        val profiles = listOf(
+            StoredProfile(name = "Termux", baseUrl = "http://127.0.0.1:4096", password = "local"),
+            StoredProfile(name = "Desk", baseUrl = "http://192.168.1.20:4096", password = ""),
+        )
+        val list = ListSerializer(StoredProfile.serializer())
+        assertEquals(profiles, json.decodeFromString(list, json.encodeToString(list, profiles)))
+        assertEquals(emptyList<StoredProfile>(), json.decodeFromString(list, "[]"))
+        // A row written without a name keeps the empty default instead of failing the decode.
+        val bare = json.decodeFromString(StoredProfile.serializer(), """{"baseUrl":"http://127.0.0.1:4096","password":"x"}""")
+        assertEquals("", bare.name)
+        assertEquals("http://127.0.0.1:4096", bare.baseUrl)
     }
 }

@@ -178,6 +178,7 @@ private fun sharedUris(intent: Intent): List<Uri> {
 private fun App(shared: Intent?, onShared: () -> Unit) {
     val ctx = LocalContext.current
     var cfg by remember { mutableStateOf(Cfg.load(ctx)) }
+    var profiles by remember { mutableStateOf(Cfg.list(ctx)) }
     var screen by rememberSaveable { mutableStateOf(Screen.Sessions) }
     var pickerMode by rememberSaveable { mutableStateOf(PickerMode.Session) }
     val vm: ChatViewModel = viewModel(key = "${cfg.baseUrl}|${cfg.password}")
@@ -295,12 +296,17 @@ private fun App(shared: Intent?, onShared: () -> Unit) {
 
         Screen.Connection -> ConnectionScreen(
             cfg = cfg,
+            profiles = profiles,
             state = state,
             onBack = { screen = Screen.Sessions },
             onRefresh = vm::refresh,
             onDefaultModel = { openPicker(PickerMode.DefaultModel) },
             onDefaultAgent = { openPicker(PickerMode.DefaultAgent) },
-            onSave = { Cfg.save(ctx, it); cfg = it; screen = Screen.Sessions },
+            onActivate = { name -> Cfg.activate(ctx, name); cfg = Cfg.load(ctx) },
+            onAdd = { profile -> Cfg.add(ctx, profile); profiles = Cfg.list(ctx); cfg = Cfg.load(ctx) },
+            onRemove = { name -> Cfg.remove(ctx, name); profiles = Cfg.list(ctx); cfg = Cfg.load(ctx) },
+            // Reloading keeps the active profile's name; the new key recreates the view model.
+            onSave = { Cfg.save(ctx, it); cfg = Cfg.load(ctx); screen = Screen.Sessions },
         )
     }
 }
@@ -1295,6 +1301,7 @@ private fun FormTextField(
     onValue: (String) -> Unit,
     singleLine: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
+    secret: Boolean = false,
 ) {
     TextField(
         value = value,
@@ -1306,11 +1313,15 @@ private fun FormTextField(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
-        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+        textStyle = MaterialTheme.typography.bodyMedium.copy(
+            color = MaterialTheme.colorScheme.onSurface,
+            fontFamily = if (secret) Mono else MaterialTheme.typography.bodyMedium.fontFamily,
+        ),
         shape = RoundedCornerShape(Radius.chip),
         maxLines = if (singleLine) 1 else 3,
         singleLine = singleLine,
         trailingIcon = trailing,
+        visualTransformation = if (secret) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         colors = TextFieldDefaults.colors(
             focusedContainerColor = MaterialTheme.colorScheme.surface,
             unfocusedContainerColor = MaterialTheme.colorScheme.surface,
@@ -2847,15 +2858,21 @@ private fun AgentRow(agent: AgentInfo, selected: Boolean, onClick: () -> Unit) {
 @Composable
 private fun ConnectionScreen(
     cfg: ServerConfig,
+    profiles: List<ServerConfig>,
     state: ChatState,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onDefaultModel: () -> Unit,
     onDefaultAgent: () -> Unit,
+    onActivate: (String) -> Unit,
+    onAdd: (ServerConfig) -> Unit,
+    onRemove: (String) -> Unit,
     onSave: (ServerConfig) -> Unit,
 ) {
-    var address by rememberSaveable { mutableStateOf(cfg.baseUrl) }
-    var password by rememberSaveable { mutableStateOf(cfg.password) }
+    // A profile switch changes cfg underneath, so the fields reload from the new active one.
+    var address by rememberSaveable(cfg) { mutableStateOf(cfg.baseUrl) }
+    var password by rememberSaveable(cfg) { mutableStateOf(cfg.password) }
+    var adding by rememberSaveable { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopBar(
@@ -2870,6 +2887,24 @@ private fun ConnectionScreen(
             StatusCard(state)
             SettingRow("Default model", state.defaultModel ?: "not set", onDefaultModel)
             SettingRow("Default agent", state.defaultAgent ?: "not set", onDefaultAgent)
+            Text(
+                "SERVERS",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(start = Space.l, top = Space.m),
+            )
+            Spacer(Modifier.height(Space.xs))
+            profiles.forEach { profile ->
+                val active = profile.name == cfg.name
+                ProfileRow(
+                    profile = profile,
+                    active = active,
+                    canRemove = profiles.size > 1,
+                    onActivate = { if (!active) onActivate(profile.name) },
+                    onRemove = { onRemove(profile.name) },
+                )
+            }
+            AddServerRow { adding = true }
             FieldGroup("SERVER ADDRESS", address, { address = it }, "http://127.0.0.1:4096")
             Hairline()
             FieldGroup("PASSWORD", password, { password = it }, "printed by opencode serve", secret = true)
@@ -2890,6 +2925,124 @@ private fun ConnectionScreen(
             Spacer(Modifier.height(Space.xl))
         }
     }
+
+    if (adding) {
+        var name by remember { mutableStateOf("") }
+        var newAddress by remember { mutableStateOf(Cfg.DEFAULT_URL) }
+        var newPassword by remember { mutableStateOf("") }
+        val clean = newAddress.trim().trimEnd('/')
+        AlertDialog(
+            onDismissRequest = { adding = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(Radius.panel),
+            title = {
+                Text("Add a server", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+            },
+            text = {
+                Column {
+                    FormTextField(value = name, placeholder = "Name (optional)", onValue = { name = it }, singleLine = true)
+                    Spacer(Modifier.height(Space.m))
+                    FormTextField(
+                        value = newAddress,
+                        placeholder = "http://127.0.0.1:4096",
+                        onValue = { newAddress = it },
+                        singleLine = true,
+                    )
+                    Spacer(Modifier.height(Space.m))
+                    FormTextField(
+                        value = newPassword,
+                        placeholder = "Server password",
+                        onValue = { newPassword = it },
+                        singleLine = true,
+                        secret = true,
+                    )
+                }
+            },
+            confirmButton = {
+                Choice("Add", "add", true, onReply = {
+                    if (clean.isNotEmpty()) onAdd(ServerConfig(clean, newPassword, name.trim().ifBlank { clean }))
+                    adding = false
+                }, enabled = clean.isNotEmpty())
+            },
+            dismissButton = {
+                Choice("Cancel", "cancel", false, onReply = { adding = false })
+            },
+        )
+    }
+}
+
+/** Name, address and the dot of the active profile; the close button removes the row. */
+@Composable
+private fun ProfileRow(
+    profile: ServerConfig,
+    active: Boolean,
+    canRemove: Boolean,
+    onActivate: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onActivate)
+            .heightIn(min = Size.row)
+            .padding(start = Space.l, end = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).padding(vertical = Space.m)) {
+            Text(
+                profile.name.ifBlank { profile.baseUrl },
+                style = MaterialTheme.typography.titleMedium,
+                color = if (active) AccentFill else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (profile.name.isNotBlank()) {
+                Text(
+                    profile.baseUrl,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = Mono),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (active) {
+            LiveDot(AccentFill)
+            Spacer(Modifier.width(Space.s))
+        }
+        Box(
+            Modifier
+                .size(Size.hitSmall)
+                .clip(RoundedCornerShape(Radius.chip))
+                .clickable(enabled = canRemove, onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Outlined.Close,
+                "Remove this server",
+                tint = if (canRemove) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+    Hairline()
+}
+
+@Composable
+private fun AddServerRow(onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .heightIn(min = Size.hit)
+            .padding(horizontal = Space.l, vertical = Space.m),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.Add, "Add a server", tint = AccentFill, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(Space.m))
+        Text("Add a server", style = MaterialTheme.typography.titleMedium, color = AccentFill)
+    }
+    Hairline()
 }
 
 @Composable
