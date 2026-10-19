@@ -33,14 +33,10 @@ runtime).
   title search over the server with Today / This week / Older grouping,
   per-session drafts kept on disk, and the server's JSON export handed to the
   share sheet
-
-## Phase 4 — context, cost and model control
-
-- Token and cost display under the model picker (from usage parts/totals).
-- Context window bar: input/output/reasoning/cache with remaining capacity.
-- Model picker upgrades: variants, favorites, hide models, provider icons.
-- Agent switcher preserving explicit Plan/Build choice.
-- Default model and agent for new sessions, kept on the device.
+- Context and cost: session token totals and cost from the usage event, a
+  context bar against the model's window, model variants, favourites and
+  hidden models, the agent list grouped by mode, and a default model and agent
+  for new sessions kept on the device
 
 ## Phase 5 — attachments and files
 
