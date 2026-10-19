@@ -13,6 +13,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,11 +54,16 @@ import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -147,6 +153,8 @@ private fun App() {
             onCancelForm = vm::cancelForm,
             onOpenPickers = { vm.loadPickers(); screen = Screen.Pickers },
             onLoadCommands = vm::loadCommands,
+            onRename = { vm.runCommand("rename", it) },
+            onDelete = { vm.deleteSession { vm.close(); screen = Screen.Sessions } },
         )
 
         Screen.Pickers -> PickerScreen(
@@ -175,7 +183,7 @@ private fun App() {
 // ------------------------------------------------------------------ chrome
 
 @Composable
-private fun TopBar(title: String, onBack: (() -> Unit)? = null, status: String? = null, actions: List<BarAction> = emptyList()) {
+private fun TopBar(title: String, onBack: (() -> Unit)? = null, status: String? = null, actions: List<BarAction> = emptyList(), trailing: (@Composable () -> Unit)? = null) {
     Column {
         // The actions sit flush right; only the top edge is inset so a side cutout cannot push them left.
         Row(
@@ -204,6 +212,7 @@ private fun TopBar(title: String, onBack: (() -> Unit)? = null, status: String? 
                 Text(status, style = MaterialTheme.typography.labelSmall)
             }
             actions.forEach { (icon, label, onClick) -> BarButton(icon, label, onClick) }
+            trailing?.invoke()
         }
         Hairline()
     }
@@ -524,9 +533,13 @@ private fun ChatScreen(
     onCancelForm: (String) -> Unit,
     onOpenPickers: () -> Unit,
     onLoadCommands: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit,
 ) {
     val list = rememberLazyListState()
     var input by rememberSaveable { mutableStateOf("") }
+    var renaming by remember { mutableStateOf(false) }
+    var confirmingDelete by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.messages.size, state.stream.length, state.thinking.length) {
         val count = list.layoutInfo.totalItemsCount
@@ -545,6 +558,14 @@ private fun ChatScreen(
             actions = listOf(
                 BarAction(Icons.Outlined.Tune, "Switch model or agent", onOpenPickers),
             ),
+            trailing = {
+                SessionMenu(
+                    onRename = { renaming = true },
+                    onFork = { onRunCommand("fork", "") },
+                    onCompact = { onRunCommand("compact", "") },
+                    onDelete = { confirmingDelete = true },
+                )
+            },
         )
         if (state.cutShort) {
             Banner("The stream ended before the answer finished. The text below is all the server sent.")
@@ -598,6 +619,96 @@ private fun ChatScreen(
             onStop = onStop,
         )
     }
+
+    if (renaming) {
+        var title by remember { mutableStateOf(state.title.orEmpty()) }
+        AlertDialog(
+            onDismissRequest = { renaming = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(Radius.panel),
+            title = {
+                Text("Rename session", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+            },
+            text = {
+                FormTextField(value = title, placeholder = "Session title", onValue = { title = it })
+            },
+            confirmButton = {
+                Choice("Rename", "rename", true, onReply = {
+                    val next = title.trim()
+                    if (next.isNotEmpty()) onRename(next)
+                    renaming = false
+                })
+            },
+            dismissButton = {
+                Choice("Cancel", "cancel", false, onReply = { renaming = false })
+            },
+        )
+    }
+
+    if (confirmingDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmingDelete = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(Radius.panel),
+            title = {
+                Text("Delete session", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+            },
+            text = {
+                Text(
+                    "The transcript is removed from the server. This cannot be undone.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                Choice("Delete", "delete", true, onReply = {
+                    confirmingDelete = false
+                    onDelete()
+                }, danger = true)
+            },
+            dismissButton = {
+                Choice("Keep", "keep", false, onReply = { confirmingDelete = false })
+            },
+        )
+    }
+}
+
+/** Rename and fork ride the builtin slash path; delete confirms before it drops the session. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SessionMenu(onRename: () -> Unit, onFork: () -> Unit, onCompact: () -> Unit, onDelete: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        BarButton(Icons.Outlined.MoreVert, "Session menu") { open = true }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            shape = RoundedCornerShape(Radius.control),
+            containerColor = MaterialTheme.colorScheme.surface,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            border = BorderStroke(Size.hairline, MaterialTheme.colorScheme.outline),
+        ) {
+            SessionMenuItem("Rename") { open = false; onRename() }
+            SessionMenuItem("Fork") { open = false; onFork() }
+            SessionMenuItem("Compact") { open = false; onCompact() }
+            SessionMenuItem("Delete", danger = true) { open = false; onDelete() }
+        }
+    }
+}
+
+@Composable
+private fun SessionMenuItem(label: String, danger: Boolean = false, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            )
+        },
+        onClick = onClick,
+    )
 }
 
 @Composable
@@ -667,15 +778,17 @@ private fun PermissionCard(request: PermissionRequest, onReply: (String) -> Unit
 }
 
 @Composable
-private fun Choice(label: String, decision: String, primary: Boolean, onReply: (String) -> Unit, enabled: Boolean = true) {
+private fun Choice(label: String, decision: String, primary: Boolean, onReply: (String) -> Unit, enabled: Boolean = true, danger: Boolean = false) {
+    val accent = if (danger) MaterialTheme.colorScheme.error else AccentFill
     val fill = when {
         !enabled -> MaterialTheme.colorScheme.surface
-        primary -> AccentFill
+        primary -> accent
         else -> MaterialTheme.colorScheme.background
     }
     val ink = when {
         !enabled -> MaterialTheme.colorScheme.outline
-        primary -> OnAccent
+        primary -> if (danger) MaterialTheme.colorScheme.onError else OnAccent
+        danger -> MaterialTheme.colorScheme.error
         else -> MaterialTheme.colorScheme.onSurface
     }
     Box(
@@ -683,7 +796,7 @@ private fun Choice(label: String, decision: String, primary: Boolean, onReply: (
             .heightIn(min = Size.hitSmall)
             .clip(RoundedCornerShape(Radius.control))
             .background(fill)
-            .border(Size.hairline, if (primary && enabled) AccentFill else MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.control))
+            .border(Size.hairline, if ((primary || danger) && enabled) accent else MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.control))
             .clickable(enabled = enabled) { onReply(decision) }
             .padding(horizontal = Space.m, vertical = Space.s),
         contentAlignment = Alignment.Center,

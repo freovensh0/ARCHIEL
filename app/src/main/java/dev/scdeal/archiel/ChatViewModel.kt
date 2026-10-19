@@ -372,6 +372,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             .onFailure { e -> fail("Could not open a session: ${e.message}") }
     }
 
+    fun deleteSession(onDeleted: () -> Unit) = viewModelScope.launch {
+        val id = _state.value.sessionId ?: return@launch
+        runCatching { client.deleteSession(id) }
+            .onSuccess {
+                _state.update { it.copy(sessions = it.sessions.filterNot { s -> s.id == id }) }
+                onDeleted()
+            }
+            .onFailure { e -> fail("Could not delete the session: ${e.message}") }
+    }
+
     fun send(text: String) {
         val body = text.trim()
         val id = _state.value.sessionId ?: return

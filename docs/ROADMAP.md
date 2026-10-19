@@ -32,7 +32,8 @@ runtime).
 
 ## Phase 3 — session management
 
-- Rename, fork, compact, share/unshare, delete from a session menu.
+- Rename, fork, compact, delete from a session menu. Share links are gone from the
+  server in v2.0.32 (`session.share` is deprecated), so they are not in the menu.
 - Search bar over titles; time grouping Today / This week / Older.
 - Draft persistence per session (input text survives navigation and death).
 - Export the session as a JSON file via the share sheet.

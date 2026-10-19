@@ -310,6 +310,11 @@ class OpenCodeClient(baseUrl: String, private val password: String) {
         call("PATCH", "/api/session/$sessionID", buildJsonObject { put("title", title) }.toString())
     }
 
+    /** The server answers 204 with no body, so there is nothing to decode. */
+    suspend fun deleteSession(sessionID: String) {
+        call("DELETE", "/api/session/$sessionID")
+    }
+
     /** The server re-reads its config; used after the user edits one outside the app. */
     suspend fun reloadConfig() {
         call("POST", "/api/location/reload", "{}")
