@@ -3,6 +3,7 @@ package dev.scdeal.archiel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -389,7 +390,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** The network half of [send], apart so Retry resends without echoing the user turn twice. */
-    private fun dispatch(id: String, body: String) = viewModelScope.launch {
+    private fun dispatch(id: String, body: String): Job = viewModelScope.launch {
         _state.update { it.copy(busy = true, error = null) }
         runCatching { client.send(id, body) }
             .onFailure { e ->
