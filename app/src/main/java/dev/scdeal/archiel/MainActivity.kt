@@ -1943,7 +1943,7 @@ private fun ModelRow(
             .fillMaxWidth()
             .clickable(enabled = enabled, onClick = { onPick(null) })
             .heightIn(min = Size.row)
-            .padding(start = Space.l, end = Space.xs, vertical = Space.s)
+            .padding(start = Space.l, top = Space.s, end = Space.xs, bottom = Space.s)
             // Dimmed rather than dropped: a hidden model still has to be reachable from here.
             .alpha(if (hidden) 0.5f else 1f),
         verticalAlignment = Alignment.CenterVertically,
@@ -2000,7 +2000,7 @@ private fun VariantRow(id: String, selected: Boolean, onPick: () -> Unit) {
             .fillMaxWidth()
             .clickable(onClick = onPick)
             .heightIn(min = Size.hit)
-            .padding(start = Space.xxl, end = Space.l, vertical = Space.s),
+            .padding(start = Space.xxl, top = Space.s, end = Space.l, bottom = Space.s),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
