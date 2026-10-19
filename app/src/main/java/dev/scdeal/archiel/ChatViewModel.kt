@@ -59,18 +59,33 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
+    /** What Retry re-runs; null means the current sentence has nothing worth replaying. */
+    private var retryAction: (() -> Unit)? = null
+    private val _canRetry = MutableStateFlow(false)
+    val canRetry: StateFlow<Boolean> = _canRetry.asStateFlow()
+
+    fun retry() {
+        val action = retryAction ?: return
+        retryAction = null
+        _canRetry.value = false
+        _state.update { it.copy(error = null) }
+        action()
+    }
+
+    private fun fail(message: String, action: (() -> Unit)? = null) {
+        retryAction = action
+        _canRetry.value = action != null
+        _state.update { it.copy(error = message) }
+    }
+
     init {
         viewModelScope.launch {
             client.events()
                 // The phone sleeps and sockets die; back off instead of hammering the server.
                 .retryWhen { cause, attempt ->
                     val wait = min(15_000L, 1_000L shl min(attempt.toInt(), 4))
-                    _state.update {
-                        it.copy(
-                            online = false,
-                            error = "The event stream dropped (${cause.message}). Retrying in ${wait / 1000}s.",
-                        )
-                    }
+                    _state.update { it.copy(online = false) }
+                    fail("The event stream dropped (${cause.message}). Retrying in ${wait / 1000}s.")
                     delay(wait)
                     true
                 }
@@ -95,7 +110,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { client.agents() to client.models() }
                 .onSuccess { (agents, models) -> _state.update { it.copy(agents = agents, models = models) } }
-                .onFailure { e -> _state.update { it.copy(error = "Could not load agents and models: ${e.message}") } }
+                .onFailure { e -> fail("Could not load agents and models: ${e.message}") }
         }
     }
 
@@ -126,16 +141,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { it.copy(busy = false, stream = "", thinking = "", tools = emptyList()) }
                 loadMessages()
             }
-            "error" in type ->
-                _state.update {
-                    it.copy(
-                        busy = false,
-                        cutShort = true,
-                        thinking = "",
-                        tools = emptyList(),
-                        error = "The server reported an error: ${data.toString().take(160)}",
-                    )
-                }
+            "error" in type -> {
+                _state.update { it.copy(busy = false, cutShort = true, thinking = "", tools = emptyList()) }
+                // Reload so the transcript shows what the server actually stored before it failed.
+                fail("The server reported an error: ${data.toString().take(160)}") { loadMessages() }
+            }
         }
     }
 
@@ -169,7 +179,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { client.replyPermission(id, requestID, decision) }
                 .onSuccess { _state.update { it.copy(permissions = it.permissions.filterNot { p -> p.id == requestID }) } }
-                .onFailure { e -> _state.update { it.copy(error = "Could not answer the permission request: ${e.message}") } }
+                .onFailure { e -> fail("Could not answer the permission request: ${e.message}") }
             pollPermissions()
         }
     }
@@ -179,7 +189,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { client.setModel(id, providerID, modelID) }
                 .onSuccess { _state.update { it.copy(model = "$providerID/$modelID") } }
-                .onFailure { e -> _state.update { it.copy(error = "Could not switch the model: ${e.message}") } }
+                .onFailure { e -> fail("Could not switch the model: ${e.message}") }
         }
     }
 
@@ -188,7 +198,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { client.setAgent(id, agent) }
                 .onSuccess { _state.update { it.copy(agent = agent) } }
-                .onFailure { e -> _state.update { it.copy(error = "Could not switch the agent: ${e.message}") } }
+                .onFailure { e -> fail("Could not switch the agent: ${e.message}") }
         }
     }
 
@@ -202,7 +212,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(busy = true, cutShort = false, thinking = "", tools = emptyList(), error = null) }
             runCatching { client.runCommand(id, name, arguments) }
                 .onSuccess { pollPermissions() }
-                .onFailure { e -> _state.update { it.copy(busy = false, error = "Could not run /$name: ${e.message}") } }
+                .onFailure { e ->
+                    _state.update { it.copy(busy = false) }
+                    fail("Could not run /$name: ${e.message}") { runCommand(name, arguments) }
+                }
         }
     }
 
@@ -234,7 +247,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-            .onFailure { e -> _state.update { it.copy(error = "Could not run /$name: ${e.message}") } }
+            // A builtin can half-apply (undo interrupts before it reverts), so Retry only replays server commands.
+            .onFailure { e -> fail("Could not run /$name: ${e.message}") }
         loadMessages()
     }
 
@@ -257,9 +271,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }.onFailure { e ->
-            _state.update {
-                it.copy(loading = false, online = false, error = "The server is not answering: ${e.message}")
-            }
+            _state.update { it.copy(loading = false, online = false) }
+            fail("The server is not answering: ${e.message}")
         }
     }
 
@@ -298,34 +311,39 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 open(s.id)
                 onCreated(s.id)
             }
-            .onFailure { e -> _state.update { it.copy(error = "Could not open a session: ${e.message}") } }
+            .onFailure { e -> fail("Could not open a session: ${e.message}") }
     }
 
     fun send(text: String) {
         val body = text.trim()
         val id = _state.value.sessionId ?: return
         if (body.isEmpty()) return
-        viewModelScope.launch {
-            _state.update {
-                it.copy(
-                    messages = it.messages + Message(id = "local-${System.nanoTime()}", type = "user", text = body),
-                    busy = true,
-                    cutShort = false,
-                    thinking = "",
-                    tools = emptyList(),
-                    error = null,
-                )
-            }
-            runCatching { client.send(id, body) }
-                .onFailure { e -> _state.update { it.copy(busy = false, error = "Could not send the message: ${e.message}") } }
+        _state.update {
+            it.copy(
+                messages = it.messages + Message(id = "local-${System.nanoTime()}", type = "user", text = body),
+                cutShort = false,
+                thinking = "",
+                tools = emptyList(),
+            )
         }
+        dispatch(id, body)
+    }
+
+    /** The network half of [send], apart so Retry resends without echoing the user turn twice. */
+    private fun dispatch(id: String, body: String) = viewModelScope.launch {
+        _state.update { it.copy(busy = true, error = null) }
+        runCatching { client.send(id, body) }
+            .onFailure { e ->
+                _state.update { it.copy(busy = false) }
+                fail("Could not send the message: ${e.message}") { dispatch(id, body) }
+            }
     }
 
     fun stop() {
         val id = _state.value.sessionId ?: return
         viewModelScope.launch {
             runCatching { client.interrupt(id) }
-                .onFailure { e -> _state.update { it.copy(error = "Could not stop it: ${e.message}") } }
+                .onFailure { e -> fail("Could not stop it: ${e.message}") }
         }
     }
 
@@ -348,7 +366,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         _state.update { it.copy(previews = it.previews + (id to last.preview())) }
                     }
                 }
-                .onFailure { e -> _state.update { it.copy(online = false, error = "Could not load the messages: ${e.message}") } }
+                .onFailure { e ->
+                    _state.update { it.copy(online = false) }
+                    fail("Could not load the messages: ${e.message}") { loadMessages() }
+                }
         }
     }
 }

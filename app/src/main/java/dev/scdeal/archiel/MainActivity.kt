@@ -109,6 +109,7 @@ private fun App() {
     var screen by rememberSaveable { mutableStateOf(Screen.Sessions) }
     val vm: ChatViewModel = viewModel(key = "${cfg.baseUrl}|${cfg.password}")
     val state by vm.state.collectAsState()
+    val canRetry by vm.canRetry.collectAsState()
 
     BackHandler(enabled = screen != Screen.Sessions) { screen = Screen.Sessions }
 
@@ -125,6 +126,7 @@ private fun App() {
 
         Screen.Chat -> ChatScreen(
             state = state,
+            onRetry = if (canRetry) ({ vm.retry() }) else null,
             onBack = { vm.close(); screen = Screen.Sessions },
             onSend = vm::send,
             onStop = vm::stop,
@@ -436,6 +438,7 @@ private fun Centered(title: String, body: String, foot: String? = null) {
 @Composable
 private fun ChatScreen(
     state: ChatState,
+    onRetry: (() -> Unit)?,
     onBack: () -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
@@ -483,6 +486,7 @@ private fun ChatScreen(
                 item("live") { LiveTurn(state.tools, state.thinking, state.stream) }
             }
         }
+        state.error?.let { sentence -> ErrorCard(sentence, onRetry) }
         state.permissions.firstOrNull()?.let { request ->
             PermissionCard(request, onReply = { decision -> onReplyPermission(request.id, decision) })
         }
@@ -504,6 +508,29 @@ private fun ChatScreen(
             },
             onStop = onStop,
         )
+    }
+}
+
+@Composable
+private fun ErrorCard(sentence: String, onRetry: (() -> Unit)?) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(Space.m)
+            .clip(RoundedCornerShape(Radius.control))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(Size.hairline, MaterialTheme.colorScheme.outline, RoundedCornerShape(Radius.control))
+            .padding(Space.m),
+    ) {
+        Row(verticalAlignment = Alignment.Top) {
+            LiveDot(MaterialTheme.colorScheme.error)
+            Spacer(Modifier.width(Space.m))
+            Text(sentence, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+        }
+        onRetry?.let { retry ->
+            Spacer(Modifier.height(Space.s))
+            Choice("Retry", "retry", true, onReply = { retry() })
+        }
     }
 }
 
