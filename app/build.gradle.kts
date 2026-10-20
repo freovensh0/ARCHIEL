@@ -45,6 +45,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
+    // The shell behind the screen capture: Shizuku runs the commands as the phone's own user.
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
+    implementation(libs.shizuku.aidl)
 
     testImplementation(libs.junit)
 }

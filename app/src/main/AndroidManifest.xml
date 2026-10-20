@@ -4,7 +4,6 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
@@ -39,16 +38,25 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <!-- The assistant: it holds the screen capture and the event stream, so it is a foreground
-             service. The consent behind a capture cannot be replayed, so the service never restarts
-             on its own. -->
+        <!-- The assistant: it keeps the event stream open and announces a finished run, so it is a
+             foreground service. It never restarts on its own: the user turns it on again. -->
         <service
             android:name=".AssistantService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection|specialUse">
+            android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps the opencode event stream open and announces a finished run" />
         </service>
+
+        <!-- Shizuku hands the binder that lets the app run the shell, which is how the screen is
+             captured without a MediaProjection consent. -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
     </application>
 </manifest>

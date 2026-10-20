@@ -80,16 +80,24 @@ adb install -r /tmp/archiel/app-debug.apk
 
 A foreground service that turns the app into an assistant:
 
-- **Screen capture.** The dock's *Screen* item (or the *Capture* action on the assistant
-  notification) snaps the screen of whatever is in front and drops the picture into the chat as an
-  attachment. Android asks once for the screen capture; the share chip at the top of the screen
-  turns it off, and the service stops with it.
+- **Screen shots.** The *Snap* action on the assistant notification (or the dock's *Screen* item)
+  takes one shot of whatever is on the screen and drops it into the chat as an attachment. The shot
+  is taken by [Shizuku](https://shizuku.rikka.app/), the shell of the phone itself: nothing of the
+  screen is held open between the shots, and Android asks for no permission at all. Shizuku has to
+  be installed and running; the first time, ARCHIEL asks it for the shell.
 - **Run alerts.** The service keeps the event stream open, so the phone says when the run of the
   session it last talked to has finished, even with the app in the background. Tapping the
   notification opens that session.
 
-Both live behind *Connection → Assistant*. The service is not sticky: the screen capture consent
-cannot be replayed, so the assistant is turned on again by hand after the process dies.
+Both live behind *Connection → Assistant*. The service is not sticky: it lives while the run
+alerts are on, and a shot taken without them starts it only for the shot.
+
+### Shizuku
+
+[Shizuku](https://shizuku.rikka.app/download/) runs commands as the phone's own user. Start it
+from the Shizuku app (wireless debugging on Android 11 and later, an adb host on older ones); on a
+reboot it has to be started again. ARCHIEL asks Shizuku for the shell the first time, and the
+answer is remembered until Shizuku is restarted.
 
 ## Layout
 

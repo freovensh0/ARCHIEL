@@ -51,9 +51,9 @@ runtime).
 - Several servers: the connection screen keeps a list of profiles (a name, an
   address, a password), the active one carries the status dot, and switching
   one remakes the connection
-- The assistant: a foreground service that holds the screen capture and the
-  event stream, so the dock's Screen item (or the notification action) snaps the
-  screen from any app, and the phone says when the watched run has finished
+- The assistant: a foreground service that keeps the event stream open and says
+  when the watched run has finished, and one shot of the screen taken by the
+  shell through Shizuku, so nothing of the screen is held open between the shots
 
 ## Phase 7 — shells and terminals
 

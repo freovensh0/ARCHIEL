@@ -1,19 +1,17 @@
 package dev.scdeal.archiel
 
 import android.Manifest
-import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
-import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Base64
 import android.util.LruCache
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -98,10 +96,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.onDispose
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -143,6 +143,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
+import rikka.shizuku.Shizuku
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -214,6 +215,15 @@ private fun sharedUris(intent: Intent): List<Uri> {
     return listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
 }
 
+/** What the shell can do right now: not running, waiting for the permission, or ready. */
+private fun shellState(ctx: Context): String = runCatching {
+    when {
+        !Shizuku.pingBinder() -> "not running"
+        Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> "ready"
+        else -> "permission needed"
+    }
+}.getOrDefault("not running")
+
 @Composable
 private fun App(shared: Intent?, captured: String?, opened: String?, onHandled: () -> Unit) {
     val ctx = LocalContext.current
@@ -255,38 +265,23 @@ private fun App(shared: Intent?, captured: String?, opened: String?, onHandled: 
         onHandled()
     }
 
-    // The assistant needs two things from the system: the notification permission and the consent
-    // to capture the screen. The consent waits for the permission, so the two never race.
-    var captureNow by remember { mutableStateOf(false) }
-    var assistantOn by remember { mutableStateOf(Assistant.isOn(ctx)) }
-    val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val data = result.data
-        if (result.resultCode == Activity.RESULT_OK && data != null) {
-            AssistantService.start(ctx, result.resultCode, data, captureNow)
-            captureNow = false
-            assistantOn = true
+    // The assistant: the run alerts, and the shell that takes the screen shots.
+    var alerts by remember { mutableStateOf(Assistant.alerts(ctx)) }
+    var shell by remember { mutableStateOf(shellState(ctx)) }
+    val notification = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    // The shell reports back twice: when the permission is answered, and when Shizuku itself starts.
+    DisposableEffect(Unit) {
+        val permission = Shizuku.OnRequestPermissionResultListener { _, _ -> shell = shellState(ctx) }
+        val binder = Shizuku.OnBinderReceivedListener { shell = shellState(ctx) }
+        Shizuku.addRequestPermissionResultListener(permission)
+        Shizuku.addBinderReceivedListener(binder)
+        onDispose {
+            Shizuku.removeRequestPermissionResultListener(permission)
+            Shizuku.removeBinderReceivedListener(binder)
         }
     }
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (!granted) {
-            Toast.makeText(ctx, "Android keeps the alerts quiet without the notification permission.", Toast.LENGTH_LONG).show()
-        }
-        consent.launch(ctx.getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())
-    }
-    val askConsent: (Boolean) -> Unit = { snap ->
-        captureNow = snap
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            permission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            consent.launch(ctx.getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())
-        }
-    }
-    // The snap goes to the service when it holds the consent; without it the user is asked again.
-    val onSnap: () -> Unit = {
-        if (!AssistantService.capture(ctx)) askConsent(true)
-    }
+    // The shot is taken by the shell, so nothing of the screen is held open between the shots.
+    val onSnap: () -> Unit = { AssistantService.snap(ctx) }
 
     // Both entry points fetch the picker lists the first time they are needed.
     val openPicker: (PickerMode) -> Unit = { mode -> vm.loadPickers(); pickerMode = mode; screen = Screen.Pickers }
@@ -313,7 +308,7 @@ private fun App(shared: Intent?, captured: String?, opened: String?, onHandled: 
             onPreview = vm::preview,
             onRefresh = vm::refresh,
             onSearch = vm::search,
-            onSettings = { assistantOn = Assistant.isOn(ctx); screen = Screen.Connection },
+            onSettings = { alerts = Assistant.alerts(ctx); shell = shellState(ctx); screen = Screen.Connection },
         )
 
         Screen.Chat -> ChatScreen(
@@ -397,13 +392,27 @@ private fun App(shared: Intent?, captured: String?, opened: String?, onHandled: 
             onActivate = { name -> Cfg.activate(ctx, name); cfg = Cfg.load(ctx) },
             onAdd = { profile -> Cfg.add(ctx, profile); profiles = Cfg.list(ctx); cfg = Cfg.load(ctx) },
             onRemove = { name -> Cfg.remove(ctx, name); profiles = Cfg.list(ctx); cfg = Cfg.load(ctx) },
-            assistantOn = assistantOn,
-            onAssistant = { on ->
+            alerts = alerts,
+            onAlerts = { on ->
+                Assistant.setAlerts(ctx, on)
+                alerts = on
                 if (on) {
-                    askConsent(false)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        notification.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    AssistantService.start(ctx)
                 } else {
                     AssistantService.stop(ctx)
-                    assistantOn = false
+                }
+            },
+            shell = shell,
+            onShell = {
+                when {
+                    !Shizuku.pingBinder() -> Shell.open(ctx)
+                    Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> Unit
+                    else -> Shell.ask()
                 }
             },
             // Reloading keeps the active profile's name; the new key recreates the view model.
@@ -2974,8 +2983,10 @@ private fun ConnectionScreen(
     onAdd: (ServerConfig) -> Unit,
     onRemove: (String) -> Unit,
     onSave: (ServerConfig) -> Unit,
-    assistantOn: Boolean,
-    onAssistant: (Boolean) -> Unit,
+    alerts: Boolean,
+    onAlerts: (Boolean) -> Unit,
+    shell: String,
+    onShell: () -> Unit,
 ) {
     // A profile switch changes cfg underneath, so the fields reload from the new active one.
     var address by rememberSaveable(cfg) { mutableStateOf(cfg.baseUrl) }
@@ -3002,10 +3013,12 @@ private fun ConnectionScreen(
                 modifier = Modifier.padding(start = Space.l, top = Space.m),
             )
             Spacer(Modifier.height(Space.xs))
-            SettingRow("Screen capture and run alerts", if (assistantOn) "on" else "off") { onAssistant(!assistantOn) }
+            SettingRow("Run alerts", if (alerts) "on" else "off") { onAlerts(!alerts) }
+            SettingRow("Shizuku", shell, onShell)
             Text(
-                "The assistant keeps a foreground service open: it snaps the screen from any app and it says " +
-                    "when a run ends. Android asks once for the screen capture, and the share chip at the top turns it off.",
+                "The run alerts keep a foreground service open, so the phone says when an agent has " +
+                    "finished. The screen shots are taken by Shizuku, the shell of the phone itself: " +
+                    "nothing of the screen is held open between the shots.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(Space.l),

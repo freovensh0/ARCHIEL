@@ -8,14 +8,15 @@ import android.content.Context
  */
 object Assistant {
     private const val FILE = "assistant"
-    private const val KEY_ON = "on"
+    private const val KEY_ALERTS = "alerts"
     private const val KEY_SESSION = "session"
     private const val KEY_TITLE = "title"
 
-    fun isOn(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_ON, false)
+    /** The run alerts: the service stays open and says when a run has finished. */
+    fun alerts(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_ALERTS, false)
 
-    fun setOn(ctx: Context, on: Boolean) {
-        prefs(ctx).edit().putBoolean(KEY_ON, on).apply()
+    fun setAlerts(ctx: Context, on: Boolean) {
+        prefs(ctx).edit().putBoolean(KEY_ALERTS, on).apply()
     }
 
     /** The session the assistant watches: the last one the phone talked to. */
