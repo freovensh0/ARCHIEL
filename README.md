@@ -76,6 +76,21 @@ adb install -r /tmp/archiel/app-debug.apk
 - Keeps the stream alive with exponential backoff when the phone suspends the process.
 - The connection screen reports what the server actually says: version, latency, session count.
 
+## The assistant
+
+A foreground service that turns the app into an assistant:
+
+- **Screen capture.** The dock's *Screen* item (or the *Capture* action on the assistant
+  notification) snaps the screen of whatever is in front and drops the picture into the chat as an
+  attachment. Android asks once for the screen capture; the share chip at the top of the screen
+  turns it off, and the service stops with it.
+- **Run alerts.** The service keeps the event stream open, so the phone says when the run of the
+  session it last talked to has finished, even with the app in the background. Tapping the
+  notification opens that session.
+
+Both live behind *Connection → Assistant*. The service is not sticky: the screen capture consent
+cannot be replayed, so the assistant is turned on again by hand after the process dies.
+
 ## Layout
 
 ```

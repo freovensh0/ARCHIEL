@@ -582,6 +582,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         loadMessages()
         // A question asked while the screen was closed has no live event left to replay.
         pollPrompts()
+        // The assistant announces the run of the session the phone last talked to.
+        if (!readOnly) Assistant.watch(getApplication<Application>(), id, existing?.title)
     }
 
     fun close() {

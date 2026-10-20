@@ -51,6 +51,9 @@ runtime).
 - Several servers: the connection screen keeps a list of profiles (a name, an
   address, a password), the active one carries the status dot, and switching
   one remakes the connection
+- The assistant: a foreground service that holds the screen capture and the
+  event stream, so the dock's Screen item (or the notification action) snaps the
+  screen from any app, and the phone says when the watched run has finished
 
 ## Phase 7 — shells and terminals
 
@@ -59,9 +62,10 @@ runtime).
 
 ## Phase 8 — device integration
 
-- Completion notification: foreground service keeps the event stream alive
-  and notifies when `session.execution.succeeded` arrives.
 - Credentials move to EncryptedSharedPreferences behind a biometric prompt.
+- The agent reaches the phone: the phone serves a small endpoint on the loopback
+  address, the prompt names it, and a reminder the agent posts is scheduled
+  locally and fires when it is due.
 
 ## Phase 9 — connection depth
 

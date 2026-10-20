@@ -1,13 +1,19 @@
 package dev.scdeal.archiel
 
+import android.Manifest
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Base64
 import android.util.LruCache
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -125,6 +131,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
@@ -135,6 +143,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -145,18 +154,49 @@ class MainActivity : ComponentActivity() {
     /** A share the activity still has to hand over: the view model only exists inside the composition. */
     private var shared by mutableStateOf<Intent?>(null)
 
+    /** A screen capture the service wrote, handed over the same way a share is. */
+    private var captured by mutableStateOf<String?>(null)
+
+    /** The session a run notification asks for. */
+    private var opened by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         // A rotation recreates the activity with the same intent; only a cold start is a new share.
-        if (savedInstanceState == null) shared = intent?.takeIf { it.action == Intent.ACTION_SEND }
-        setContent { ArchielTheme { App(shared = shared, onShared = { shared = null }) } }
+        if (savedInstanceState == null) {
+            shared = intent?.takeIf { it.action == Intent.ACTION_SEND }
+            captured = intent?.getStringExtra(EXTRA_CAPTURE)
+            opened = intent?.getStringExtra(EXTRA_SESSION)
+        }
+        setContent {
+            ArchielTheme {
+                App(
+                    shared = shared,
+                    captured = captured,
+                    opened = opened,
+                    onHandled = {
+                        shared = null
+                        captured = null
+                        opened = null
+                    },
+                )
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         shared = intent.takeIf { it.action == Intent.ACTION_SEND }
+        captured = intent.getStringExtra(EXTRA_CAPTURE)
+        opened = intent.getStringExtra(EXTRA_SESSION)
+    }
+
+    companion object {
+        /** The file the assistant service captured, and the session a notification names. */
+        const val EXTRA_CAPTURE = "capture"
+        const val EXTRA_SESSION = "session"
     }
 }
 
@@ -175,7 +215,7 @@ private fun sharedUris(intent: Intent): List<Uri> {
 }
 
 @Composable
-private fun App(shared: Intent?, onShared: () -> Unit) {
+private fun App(shared: Intent?, captured: String?, opened: String?, onHandled: () -> Unit) {
     val ctx = LocalContext.current
     var cfg by remember { mutableStateOf(Cfg.load(ctx)) }
     var profiles by remember { mutableStateOf(Cfg.list(ctx)) }
@@ -194,7 +234,58 @@ private fun App(shared: Intent?, onShared: () -> Unit) {
             // The chat opens once the session that carries the share exists.
             vm.share(uris, text.orEmpty()) { screen = Screen.Chat }
         }
-        onShared()
+        onHandled()
+    }
+
+    // A capture the service took is a file, so it joins the dock the same way a share does.
+    LaunchedEffect(captured) {
+        val path = captured ?: return@LaunchedEffect
+        val uri = runCatching {
+            FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", File(path))
+        }.getOrNull()
+        if (uri != null) vm.share(listOf(uri), "") { screen = Screen.Chat }
+        onHandled()
+    }
+
+    // A run notification names the session the answer is in.
+    LaunchedEffect(opened) {
+        val id = opened ?: return@LaunchedEffect
+        vm.open(id)
+        screen = Screen.Chat
+        onHandled()
+    }
+
+    // The assistant needs two things from the system: the notification permission and the consent
+    // to capture the screen. The consent waits for the permission, so the two never race.
+    var captureNow by remember { mutableStateOf(false) }
+    var assistantOn by remember { mutableStateOf(Assistant.isOn(ctx)) }
+    val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        if (result.resultCode == Activity.RESULT_OK && data != null) {
+            AssistantService.start(ctx, result.resultCode, data, captureNow)
+            captureNow = false
+            assistantOn = true
+        }
+    }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) {
+            Toast.makeText(ctx, "Android keeps the alerts quiet without the notification permission.", Toast.LENGTH_LONG).show()
+        }
+        consent.launch(MediaProjectionManager.createScreenCaptureIntent())
+    }
+    val askConsent: (Boolean) -> Unit = { snap ->
+        captureNow = snap
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            consent.launch(MediaProjectionManager.createScreenCaptureIntent())
+        }
+    }
+    // The snap goes to the service when it holds the consent; without it the user is asked again.
+    val onSnap: () -> Unit = {
+        if (!AssistantService.capture(ctx)) askConsent(true)
     }
 
     // Both entry points fetch the picker lists the first time they are needed.
@@ -222,7 +313,7 @@ private fun App(shared: Intent?, onShared: () -> Unit) {
             onPreview = vm::preview,
             onRefresh = vm::refresh,
             onSearch = vm::search,
-            onSettings = { screen = Screen.Connection },
+            onSettings = { assistantOn = Assistant.isOn(ctx); screen = Screen.Connection },
         )
 
         Screen.Chat -> ChatScreen(
@@ -233,6 +324,7 @@ private fun App(shared: Intent?, onShared: () -> Unit) {
             onDraft = vm::draft,
             onAttach = vm::attach,
             onDetach = vm::detach,
+            onSnap = onSnap,
             onMention = vm::mention,
             onUnmention = vm::unmention,
             onAttachFile = vm::attachServerFile,
@@ -305,8 +397,17 @@ private fun App(shared: Intent?, onShared: () -> Unit) {
             onActivate = { name -> Cfg.activate(ctx, name); cfg = Cfg.load(ctx) },
             onAdd = { profile -> Cfg.add(ctx, profile); profiles = Cfg.list(ctx); cfg = Cfg.load(ctx) },
             onRemove = { name -> Cfg.remove(ctx, name); profiles = Cfg.list(ctx); cfg = Cfg.load(ctx) },
+            assistantOn = assistantOn,
+            onAssistant = { on ->
+                if (on) {
+                    askConsent(false)
+                } else {
+                    AssistantService.stop(ctx)
+                    assistantOn = false
+                }
+            },
             // Reloading keeps the active profile's name; the new key recreates the view model.
-            onSave = { Cfg.save(ctx, it); cfg = Cfg.load(ctx); screen = Screen.Sessions },
+            onSave = { Cfg.save(ctx, it); cfg = Cfg.load(ctx); AssistantService.reconnect(ctx); screen = Screen.Sessions },
         )
     }
 }
@@ -766,6 +867,7 @@ private fun ChatScreen(
     onDraft: (String) -> Unit,
     onAttach: (Uri) -> Unit,
     onDetach: (String) -> Unit,
+    onSnap: () -> Unit,
     onMention: (String) -> Unit,
     onUnmention: (String) -> Unit,
     onAttachFile: (String) -> Unit,
@@ -904,6 +1006,7 @@ private fun ChatScreen(
                 files = state.fileMatches,
                 onAttach = onAttach,
                 onDetach = onDetach,
+                onSnap = onSnap,
                 onMention = onMention,
                 onUnmention = onUnmention,
                 onAttachFile = onAttachFile,
@@ -1967,6 +2070,7 @@ private fun Dock(
     attachments: List<Attachment>,
     onAttach: (Uri) -> Unit,
     onDetach: (String) -> Unit,
+    onSnap: () -> Unit,
     onMention: (String) -> Unit,
     onUnmention: (String) -> Unit,
     onAttachFile: (String) -> Unit,
@@ -2100,6 +2204,7 @@ private fun Dock(
             AttachMenu(
                 onImage = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                 onFile = { filePicker.launch(arrayOf("*/*")) },
+                onScreen = onSnap,
             )
             Spacer(Modifier.width(Space.s))
             TextField(
@@ -2231,7 +2336,7 @@ private fun MentionChip(name: String, onRemove: () -> Unit) {
 /** The paperclip sits left of the field; the menu picks between the photo picker and any document. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AttachMenu(onImage: () -> Unit, onFile: () -> Unit) {
+private fun AttachMenu(onImage: () -> Unit, onFile: () -> Unit, onScreen: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         BarButton(Icons.Outlined.AttachFile, "Attach a file") { open = true }
@@ -2246,6 +2351,7 @@ private fun AttachMenu(onImage: () -> Unit, onFile: () -> Unit) {
         ) {
             SessionMenuItem("Image") { open = false; onImage() }
             SessionMenuItem("File") { open = false; onFile() }
+            SessionMenuItem("Screen") { open = false; onScreen() }
         }
     }
 }
@@ -2868,6 +2974,8 @@ private fun ConnectionScreen(
     onAdd: (ServerConfig) -> Unit,
     onRemove: (String) -> Unit,
     onSave: (ServerConfig) -> Unit,
+    assistantOn: Boolean,
+    onAssistant: (Boolean) -> Unit,
 ) {
     // A profile switch changes cfg underneath, so the fields reload from the new active one.
     var address by rememberSaveable(cfg) { mutableStateOf(cfg.baseUrl) }
@@ -2887,6 +2995,22 @@ private fun ConnectionScreen(
             StatusCard(state)
             SettingRow("Default model", state.defaultModel ?: "not set", onDefaultModel)
             SettingRow("Default agent", state.defaultAgent ?: "not set", onDefaultAgent)
+            Text(
+                "ASSISTANT",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(start = Space.l, top = Space.m),
+            )
+            Spacer(Modifier.height(Space.xs))
+            SettingRow("Screen capture and run alerts", if (assistantOn) "on" else "off") { onAssistant(!assistantOn) }
+            Text(
+                "The assistant keeps a foreground service open: it snaps the screen from any app and it says " +
+                    "when a run ends. Android asks once for the screen capture, and the share chip at the top turns it off.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(Space.l),
+            )
+            Spacer(Modifier.height(Space.m))
             Text(
                 "SERVERS",
                 style = MaterialTheme.typography.labelSmall,
