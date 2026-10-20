@@ -174,7 +174,7 @@ class AssistantService : Service() {
             bitmap.recycle()
             file
         } finally {
-            display.release()
+            display?.release()
             reader.close()
         }
     }

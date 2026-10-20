@@ -271,7 +271,7 @@ private fun App(shared: Intent?, captured: String?, opened: String?, onHandled: 
         if (!granted) {
             Toast.makeText(ctx, "Android keeps the alerts quiet without the notification permission.", Toast.LENGTH_LONG).show()
         }
-        consent.launch(MediaProjectionManager.createScreenCaptureIntent())
+        consent.launch(ctx.getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())
     }
     val askConsent: (Boolean) -> Unit = { snap ->
         captureNow = snap
@@ -280,7 +280,7 @@ private fun App(shared: Intent?, captured: String?, opened: String?, onHandled: 
         ) {
             permission.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            consent.launch(MediaProjectionManager.createScreenCaptureIntent())
+            consent.launch(ctx.getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())
         }
     }
     // The snap goes to the service when it holds the consent; without it the user is asked again.
